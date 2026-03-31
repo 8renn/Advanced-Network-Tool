@@ -1,7 +1,28 @@
+# Build output
+build/
+dist/
+release/
+
+# PyInstaller
+*.spec
+
+# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.exe
+
+# Logs
 *.log
-venv/
-.env
+sip_alg_debug.log
+advanced_ip_scanner.log
+
+# IDE/Editor
+.claude/
+.cursorrules
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

@@ -1,436 +1,327 @@
-import ctypes
-import subprocess
-from ctypes import wintypes
-from pathlib import Path
-
-from PySide6.QtCore import QEvent, QObject, QTimer, Qt
-from PySide6.QtGui import QKeyEvent, QResizeEvent
+from PySide6.QtCore import QTimer, Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QFrame,
-    QSizePolicy,
-    QVBoxLayout,
     QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QSpinBox,
+    QDoubleSpinBox,
+    QCheckBox,
+    QMessageBox,
+    QSizePolicy,
 )
 
-_user32 = ctypes.WinDLL("user32", use_last_error=True)
-_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+import sys
+import ctypes
 
-GWL_STYLE = -16
-WS_POPUP = 0x80000000
-WS_CHILD = 0x40000000
-WS_CAPTION = 0x00C00000
-WS_THICKFRAME = 0x00040000
-WS_MINIMIZEBOX = 0x00020000
-WS_MAXIMIZEBOX = 0x00010000
-WS_SYSMENU = 0x00080000
-SWP_NOZORDER = 0x0004
-SWP_SHOWWINDOW = 0x0040
-SWP_FRAMECHANGED = 0x0020
-
-WM_KEYDOWN = 0x0100
-WM_KEYUP = 0x0101
-WM_CHAR = 0x0102
-WM_SETTEXT = 0x000C
-MAPVK_VK_TO_VSC = 0
-
-if ctypes.sizeof(ctypes.c_void_p) == 8:
-    _GetWindowLong = _user32.GetWindowLongPtrW
-    _SetWindowLong = _user32.SetWindowLongPtrW
-else:
-    _GetWindowLong = _user32.GetWindowLongW
-    _SetWindowLong = _user32.SetWindowLongW
-_GetWindowLong.argtypes = (wintypes.HWND, ctypes.c_int)
-_GetWindowLong.restype = getattr(wintypes, "LONG_PTR", ctypes.c_longlong)
-_SetWindowLong.argtypes = (wintypes.HWND, ctypes.c_int, _GetWindowLong.restype)
-_SetWindowLong.restype = _GetWindowLong.restype
-
-_user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
-_user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-
-_user32.IsWindowVisible.argtypes = (wintypes.HWND,)
-_user32.IsWindowVisible.restype = wintypes.BOOL
-
-_user32.GetParent.argtypes = (wintypes.HWND,)
-_user32.GetParent.restype = wintypes.HWND
-
-_user32.SetParent.argtypes = (wintypes.HWND, wintypes.HWND)
-_user32.SetParent.restype = wintypes.HWND
-
-_user32.GetClientRect.argtypes = (wintypes.HWND, ctypes.c_void_p)
-_user32.GetClientRect.restype = wintypes.BOOL
-
-_user32.SetWindowPos.argtypes = (
-    wintypes.HWND,
-    wintypes.HWND,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    wintypes.UINT,
-)
-_user32.SetWindowPos.restype = wintypes.BOOL
-
-_WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-_user32.EnumWindows.argtypes = (_WNDENUMPROC, wintypes.LPARAM)
-_user32.EnumWindows.restype = wintypes.BOOL
-
-_user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
-_user32.SetForegroundWindow.restype = wintypes.BOOL
-
-_user32.SetFocus.argtypes = (wintypes.HWND,)
-_user32.SetFocus.restype = wintypes.HWND
-
-_kernel32.GetCurrentThreadId.argtypes = ()
-_kernel32.GetCurrentThreadId.restype = wintypes.DWORD
-
-_user32.AttachThreadInput.argtypes = (wintypes.DWORD, wintypes.DWORD, wintypes.BOOL)
-_user32.AttachThreadInput.restype = wintypes.BOOL
-
-_CHILDWNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-_user32.EnumChildWindows.argtypes = (wintypes.HWND, _CHILDWNDENUMPROC, wintypes.LPARAM)
-_user32.EnumChildWindows.restype = wintypes.BOOL
-
-_user32.GetClassNameW.argtypes = (wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int)
-_user32.GetClassNameW.restype = ctypes.c_int
-
-_user32.IsWindow.argtypes = (wintypes.HWND,)
-_user32.IsWindow.restype = wintypes.BOOL
-
-_user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
-_user32.MapVirtualKeyW.restype = wintypes.UINT
-
-_user32.SendMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
-_user32.SendMessageW.restype = getattr(wintypes, "LRESULT", ctypes.c_ssize_t)
-
-_user32.FindWindowExW.argtypes = (
-    wintypes.HWND,
-    wintypes.HWND,
-    ctypes.c_wchar_p,
-    ctypes.c_wchar_p,
-)
-_user32.FindWindowExW.restype = wintypes.HWND
-
-_user32.GetWindowTextW.argtypes = (wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int)
-_user32.GetWindowTextW.restype = ctypes.c_int
+from core.mtr_engine import MTREngine, MAX_HOPS
 
 
-class _RECT(ctypes.Structure):
-    _fields_ = (
-        ("left", wintypes.LONG),
-        ("top", wintypes.LONG),
-        ("right", wintypes.LONG),
-        ("bottom", wintypes.LONG),
-    )
+class MTRWorker(QThread):
+    """Runs MTREngine.start_trace() off the UI thread."""
+    finished = Signal()
+    error = Signal(str)
 
+    def __init__(self, engine: MTREngine):
+        super().__init__()
+        self._engine = engine
 
-def _get_window_thread_process_id(hwnd: int) -> tuple[int, int]:
-    pid = wintypes.DWORD()
-    tid = _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    return int(tid), int(pid.value)
+    def run(self):
+        try:
+            self._engine.start_trace()
+            while self._engine.is_running:
+                self.msleep(500)
+        except Exception as e:
+            self.error.emit(str(e))
+        finally:
+            self.finished.emit()
 
-
-def _apply_input_focus_to_embedded(parent_hwnd: int, focus_hwnd: int | None = None) -> None:
-    focus = focus_hwnd if focus_hwnd is not None else parent_hwnd
-    winmtr_tid, _ = _get_window_thread_process_id(parent_hwnd)
-    cur_tid = int(_kernel32.GetCurrentThreadId())
-    _user32.AttachThreadInput(cur_tid, winmtr_tid, True)
-    try:
-        _user32.SetForegroundWindow(parent_hwnd)
-        _user32.SetFocus(focus)
-    finally:
-        _user32.AttachThreadInput(cur_tid, winmtr_tid, False)
-
-
-def _key_scan_extended(event: QKeyEvent, vk: int) -> tuple[int, int]:
-    scan = int(event.nativeScanCode()) & 0xFF
-    if scan == 0 and vk:
-        scan = int(_user32.MapVirtualKeyW(vk & 0xFF, MAPVK_VK_TO_VSC)) & 0xFF
-    ext = 1 if int(event.nativeScanCode()) > 0xFF else 0
-    return scan, ext
-
-
-def _key_lparam(scan: int, extended: int, key_up: bool) -> int:
-    lp = 1 | ((scan & 0xFF) << 16) | ((extended & 1) << 24)
-    if key_up:
-        lp |= (1 << 30) | (1 << 31)
-    return lp
-
-
-def _forward_keypress_to_edit(edit_hwnd: int, event: QKeyEvent) -> None:
-    vk = int(event.nativeVirtualKey()) & 0xFF
-    if vk == 0:
-        return
-    scan, ext = _key_scan_extended(event, vk)
-    lp_down = _key_lparam(scan, ext, False)
-    lp_up = _key_lparam(scan, ext, True)
-
-    _user32.SendMessageW(edit_hwnd, WM_KEYDOWN, vk, lp_down)
-
-    chars = list(event.text())
-    if not chars:
-        k = event.key()
-        if k == Qt.Key.Key_Backspace:
-            chars = ["\x08"]
-        elif k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            chars = ["\r"]
-        elif k == Qt.Key.Key_Tab:
-            chars = ["\t"]
-
-    for ch in chars:
-        _user32.SendMessageW(edit_hwnd, WM_CHAR, ord(ch), lp_down)
-
-    _user32.SendMessageW(edit_hwnd, WM_KEYUP, vk, lp_up)
-
-
-def _find_host_edit_hwnd(root_hwnd: int) -> int | None:
-    buf = ctypes.create_unicode_buffer(256)
-    found: list[int] = []
-
-    @_CHILDWNDENUMPROC
-    def _enum_child(child: int, _lp: int) -> bool:
-        if found:
-            return False
-        n = _user32.GetClassNameW(child, buf, 256)
-        if n > 0 and buf.value == "Edit":
-            found.append(int(child))
-            return False
-        _user32.EnumChildWindows(child, _enum_child, 0)
-        return False if found else True
-
-    _user32.EnumChildWindows(root_hwnd, _enum_child, 0)
-    return found[0] if found else None
-
-
-def _find_button_by_text(root_hwnd: int, caption: str) -> int | None:
-    tbuf = ctypes.create_unicode_buffer(256)
-    cbuf = ctypes.create_unicode_buffer(256)
-    found: list[int] = []
-
-    @_CHILDWNDENUMPROC
-    def _enum_child(child: int, _lp: int) -> bool:
-        if found:
-            return False
-        nc = _user32.GetClassNameW(child, cbuf, 256)
-        if nc > 0 and cbuf.value == "Button":
-            nt = _user32.GetWindowTextW(child, tbuf, 256)
-            if nt > 0 and tbuf.value.strip() == caption:
-                found.append(int(child))
-                return False
-        _user32.EnumChildWindows(child, _enum_child, 0)
-        return False if found else True
-
-    _user32.EnumChildWindows(root_hwnd, _enum_child, 0)
-    return found[0] if found else None
-
-
-def _find_direct_edit_under(parent_hwnd: int) -> int | None:
-    nxt = _user32.FindWindowExW(parent_hwnd, None, "Edit", None)
-    return int(nxt) if nxt else None
-
-
-def _enum_windows_find_top_level(pid: int) -> int | None:
-    found: list[int] = []
-
-    @_WNDENUMPROC
-    def _cb(hwnd: int, _lp: int) -> bool:
-        if not _user32.IsWindowVisible(hwnd):
-            return True
-        _, wpid = _get_window_thread_process_id(hwnd)
-        if wpid != pid:
-            return True
-        if _user32.GetParent(hwnd):
-            return True
-        found.append(int(hwnd))
-        return True
-
-    _user32.EnumWindows(_cb, 0)
-    return found[0] if found else None
+    def stop(self):
+        self._engine.stop_trace()
 
 
 class MTRView(QWidget):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    """WinMTR-style trace view using native Python ICMP engine."""
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        self._proc: subprocess.Popen[bytes] | None = None
-        self._child_hwnd: int | None = None
-        self.edit_hwnd: int | None = None
-        self._embed_timer: QTimer | None = None
+        self._engine = None
+        self._worker = None
+        self._update_timer = QTimer()
+        self._update_timer.setInterval(1000)
+        self._update_timer.timeout.connect(self._update_table)
 
-        root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
+        self._setup_ui()
 
-        self._container = QFrame(self)
-        self._container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._container.setAttribute(Qt.WA_NativeWindow, True)
-        self._container.installEventFilter(self)
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
-        self.overlay = QWidget(self._container)
-        self.overlay.setStyleSheet(
+        top_bar = QWidget(self)
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(8)
+
+        top_layout.addWidget(QLabel("Host:", top_bar))
+        self._host_input = QLineEdit(top_bar)
+        self._host_input.setPlaceholderText("Enter hostname or IP address")
+        self._host_input.setClearButtonEnabled(True)
+        self._host_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._host_input.setMinimumWidth(260)
+        self._host_input.returnPressed.connect(self._start_trace)
+        top_layout.addWidget(self._host_input, 1)
+
+        top_layout.addWidget(QLabel("Size:", top_bar))
+        self._size_input = QSpinBox(top_bar)
+        self._size_input.setRange(64, 4096)
+        self._size_input.setValue(64)
+        self._size_input.setSuffix(" B")
+        self._size_input.setFixedWidth(80)
+        top_layout.addWidget(self._size_input)
+
+        top_layout.addWidget(QLabel("Interval:", top_bar))
+        self._interval_input = QDoubleSpinBox(top_bar)
+        self._interval_input.setRange(0.1, 10.0)
+        self._interval_input.setValue(0.2)
+        self._interval_input.setSingleStep(0.1)
+        self._interval_input.setSuffix(" s")
+        self._interval_input.setFixedWidth(80)
+        top_layout.addWidget(self._interval_input)
+
+        self._dns_checkbox = QCheckBox("DNS", top_bar)
+        self._dns_checkbox.setChecked(True)
+        top_layout.addWidget(self._dns_checkbox)
+
+        self._start_btn = QPushButton("Start", top_bar)
+        self._start_btn.clicked.connect(self._start_trace)
+        self._start_btn.setFixedWidth(70)
+        top_layout.addWidget(self._start_btn)
+
+        self._stop_btn = QPushButton("Stop", top_bar)
+        self._stop_btn.clicked.connect(self._stop_trace_clicked)
+        self._stop_btn.setFixedWidth(70)
+        self._stop_btn.setEnabled(False)
+        top_layout.addWidget(self._stop_btn)
+
+        layout.addWidget(top_bar)
+
+        self._status_label = QLabel("Ready", self)
+        self._status_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        self._table = QTableWidget(self)
+        self._table.setObjectName("mtrTable")
+        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._table.setAlternatingRowColors(True)
+        self._table.setShowGrid(False)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._table.setStyleSheet(
             """
-            background-color: rgba(59, 95, 163, 60);
-            border-radius: 6px;
+            QTableWidget#mtrTable {
+                background-color: #1f2646;
+                alternate-background-color: #242d52;
+                color: #e8eeff;
+                border: 1px solid #334071;
+                border-radius: 10px;
+                gridline-color: #2c3764;
+                selection-background-color: #315ea8;
+                selection-color: #ffffff;
+            }
+            QTableWidget#mtrTable::item {
+                padding: 6px 8px;
+                border: none;
+            }
+            QTableWidget#mtrTable::item:hover {
+                background-color: #2f6fed;
+                color: #ffffff;
+            }
+            QHeaderView::section {
+                background-color: #19203d;
+                color: #dbe5ff;
+                border: none;
+                border-bottom: 1px solid #334071;
+                padding: 8px 6px;
+                font-weight: 600;
+            }
             """
         )
-        self.overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.overlay.setGeometry(0, 0, self._container.width(), self._container.height())
+        layout.addWidget(self._table, 1)
+        layout.addWidget(self._status_label)
 
-        root_layout.addWidget(self._container, 1)
+        self._setup_table_columns()
 
-        self._launch_winmtr()
+    def _setup_table_columns(self):
+        columns = ["Nr", "Hostname", "Loss %", "Sent", "Recv", "Best", "Avrg", "Worst", "Last"]
+        self._table.setColumnCount(len(columns))
+        self._table.setHorizontalHeaderLabels(columns)
+        self._table.setRowCount(0)
 
-    def _project_root(self) -> Path:
-        return Path(__file__).resolve().parent.parent
+        header = self._table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(0, 35)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for col in range(2, len(columns)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+            self._table.setColumnWidth(col, 65)
 
-    def _launch_winmtr(self) -> None:
-        exe = self._project_root() / "WinMTR.exe"
-        if not exe.is_file():
+    def set_host(self, hostname: str):
+        """Set the target hostname. Called externally by other views/components."""
+        self._host_input.setText(hostname)
+
+    def _start_trace(self):
+        if self._worker is not None and self._worker.isRunning():
             return
+
+        target = self._host_input.text().strip()
+        if not target:
+            self._status_label.setText("Please enter a hostname or IP address.")
+            return
+
+        # Raw-socket privilege check is only needed on non-Windows paths.
+        # Windows uses ICMP.DLL API and does not require admin elevation.
+        if sys.platform != "win32":
+            import os
+            if os.geteuid() != 0:
+                self._status_label.setText("Error: Root privileges required for raw sockets.")
+                return
+
+        # Stop any running trace first
+        self._stop_trace()
+
+        payload_size = self._size_input.value()
+        interval = self._interval_input.value()
+        use_dns = self._dns_checkbox.isChecked()
+
+        self._engine = MTREngine(
+            target_host=target,
+            payload_size=payload_size,
+            interval=interval,
+            use_dns=use_dns,
+        )
+
+        if not self._engine.resolve_target():
+            self._status_label.setText(f"Failed to resolve: {target}")
+            self._engine = None
+            return
+
+        self._status_label.setText(f"Tracing {target} ({self._engine.target_addr})...")
+        self._table.setRowCount(0)
+
+        # Toggle buttons
+        self._start_btn.setEnabled(False)
+        self._stop_btn.setEnabled(True)
+        self._host_input.setEnabled(False)
+        self._size_input.setEnabled(False)
+        self._interval_input.setEnabled(False)
+        self._dns_checkbox.setEnabled(False)
+
+        # Launch worker
+        self._worker = MTRWorker(self._engine)
+        self._worker.error.connect(self._on_trace_error)
+        self._worker.finished.connect(self._on_trace_finished)
+        self._worker.start()
+
+        self._update_timer.start()
+
+    def _stop_trace_clicked(self):
+        """Handler for Stop button click."""
+        self._stop_trace()
+        self._status_label.setText("Trace stopped.")
+
+    def _stop_trace(self):
+        """Stop the current trace if running."""
+        self._update_timer.stop()
+
+        if self._worker is not None:
+            self._worker.stop()
+            self._worker.wait(7000)
+            self._worker = None
+
+        # Keep self._engine alive so Full Report can read hop data.
+        # It will be replaced on the next Start click.
+
+        # Restore UI state
+        self._start_btn.setEnabled(True)
+        self._stop_btn.setEnabled(False)
+        self._host_input.setEnabled(True)
+        self._size_input.setEnabled(True)
+        self._interval_input.setEnabled(True)
+        self._dns_checkbox.setEnabled(True)
+
+    def _update_table(self):
+        """Refresh the table with current hop data. Called by QTimer every 1s."""
+        engine = self._engine
+        if engine is None:
+            return
+
         try:
-            self._proc = subprocess.Popen(
-                [str(exe)],
-                cwd=str(self._project_root()),
-            )
-        except OSError:
-            self._proc = None
+            hops = engine.get_all_hops()
+        except Exception:
             return
 
-        self._embed_timer = QTimer(self)
-        self._embed_timer.timeout.connect(self._try_embed)
-        self._embed_timer.start(100)
+        self._table.setRowCount(len(hops))
 
-    def _find_winmtr_hwnd(self, pid: int) -> int | None:
-        return _enum_windows_find_top_level(pid)
+        for row, hop in enumerate(hops):
+            display_name = hop["name"] if hop["name"] else hop["addr"] if hop["addr"] else "???"
 
-    def _try_embed(self) -> None:
-        if self._proc is None:
-            if self._embed_timer:
-                self._embed_timer.stop()
-            return
+            items = [
+                str(hop["nr"]),
+                display_name,
+                f"{hop['loss_percent']}%",
+                str(hop["xmit"]),
+                str(hop["returned"]),
+                str(hop["best"]),
+                str(hop["avg"]),
+                str(hop["worst"]),
+                str(hop["last"]),
+            ]
 
-        if self._proc.poll() is not None:
-            if self._embed_timer:
-                self._embed_timer.stop()
-            if self._child_hwnd is None:
-                print("WinMTR window not found")
-            return
+            for col, text in enumerate(items):
+                existing = self._table.item(row, col)
+                if existing is not None:
+                    existing.setText(text)
+                else:
+                    item = QTableWidgetItem(text)
+                    if col != 1:
+                        item.setTextAlignment(
+                            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                        )
+                    self._table.setItem(row, col, item)
 
-        hwnd = self._find_winmtr_hwnd(self._proc.pid)
-        if hwnd is None:
-            return
+    def _on_trace_error(self, error_msg: str):
+        """Handle errors from the worker thread."""
+        self._stop_trace()
+        self._status_label.setText(f"Error: {error_msg}")
 
-        container_hwnd = int(self._container.winId())
-        if container_hwnd == 0:
-            return
+    def _on_trace_finished(self):
+        """Handle worker thread natural completion."""
+        self._update_table()
+        # Only reset UI if trace was intentionally stopped
+        if not self._engine or not self._engine.is_running:
+            self._update_timer.stop()
+            self._start_btn.setEnabled(True)
+            self._stop_btn.setEnabled(False)
+            self._host_input.setEnabled(True)
+            self._size_input.setEnabled(True)
+            self._interval_input.setEnabled(True)
+            self._dns_checkbox.setEnabled(True)
+            if self._status_label.text().startswith("Tracing"):
+                self._status_label.setText("Trace complete.")
 
-        if self._embed_timer:
-            self._embed_timer.stop()
-
-        _user32.SetParent(hwnd, container_hwnd)
-
-        w, h = self._embed_target_size_px()
-        _user32.SetWindowPos(
-            hwnd,
-            0,
-            0,
-            0,
-            w,
-            h,
-            SWP_NOZORDER | SWP_SHOWWINDOW,
-        )
-
-        style = int(_GetWindowLong(hwnd, GWL_STYLE))
-        style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU)
-        _SetWindowLong(hwnd, GWL_STYLE, style)
-
-        self._child_hwnd = hwnd
-        self._resize_embedded()
-
-        self.edit_hwnd = _find_host_edit_hwnd(hwnd)
-        _apply_input_focus_to_embedded(hwnd, self.edit_hwnd)
-        self.overlay.resize(self._container.size())
-        self.overlay.raise_()
-
-    def _embed_target_size_px(self) -> tuple[int, int]:
-        w = int(self._container.width())
-        h = int(self._container.height())
-        if w > 0 and h > 0:
-            return w, h
-        container_hwnd = int(self._container.winId())
-        r = _RECT()
-        if container_hwnd and _user32.GetClientRect(container_hwnd, ctypes.byref(r)):
-            cw = int(r.right - r.left)
-            ch = int(r.bottom - r.top)
-            if cw > 0 and ch > 0:
-                return cw, ch
-        return 1, 1
-
-    def _resize_embedded(self) -> None:
-        if self._child_hwnd is None:
-            return
-        w, h = self._embed_target_size_px()
-        _user32.SetWindowPos(
-            self._child_hwnd,
-            0,
-            0,
-            0,
-            w,
-            h,
-            SWP_NOZORDER | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
-        )
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self.overlay.resize(self._container.size())
-        self.overlay.raise_()
-        self._resize_embedded()
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if (
-            not self.isVisible()
-            or not self.edit_hwnd
-            or not _user32.IsWindow(self.edit_hwnd)
-        ):
-            super().keyPressEvent(event)
-            return
-        if (int(event.nativeVirtualKey()) & 0xFF) == 0:
-            super().keyPressEvent(event)
-            return
-        _forward_keypress_to_edit(self.edit_hwnd, event)
-        event.accept()
-
-    def set_host(self, host: str) -> None:
-        root = self._child_hwnd
-        if root is None or not _user32.IsWindow(root):
-            return
-
-        cbuf = ctypes.create_unicode_buffer(256)
-        combo_hw: list[int] = []
-
-        @_CHILDWNDENUMPROC
-        def _cb(child: int, _lp: int) -> bool:
-            if combo_hw:
-                return False
-            nc = _user32.GetClassNameW(child, cbuf, 256)
-            if nc > 0 and cbuf.value == "ComboBox":
-                combo_hw.append(int(child))
-                return False
-            return True
-
-        _user32.EnumChildWindows(root, _cb, 0)
-        if not combo_hw:
-            return
-
-        combo_hwnd = combo_hw[0]
-        text_buf = ctypes.create_unicode_buffer(host)
-        _user32.SendMessageW(combo_hwnd, WM_SETTEXT, 0, ctypes.addressof(text_buf))
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched is self._container and event.type() == QEvent.Type.MouseButtonPress:
-            if self._child_hwnd is not None:
-                _apply_input_focus_to_embedded(self._child_hwnd, self.edit_hwnd)
-        return super().eventFilter(watched, event)
+    def closeEvent(self, event):
+        """Ensure trace is stopped when widget is closed or destroyed."""
+        self._stop_trace()
+        super().closeEvent(event)
 
 
 MTRWidget = MTRView

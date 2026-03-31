@@ -111,16 +111,25 @@ class SipAlgView(QWidget):
         self.banner.setStyleSheet(_state_stylesheet(st))
 
     def _on_run_clicked(self) -> None:
-        if self._detector is not None:
-            return
-        self.run_button.setEnabled(False)
-        self._reset_banner_idle()
-        det = SipAlgDetector(self)
-        det.result_signal.connect(self._on_result)
-        det.finished.connect(self._on_thread_finished)
-        det.finished.connect(det.deleteLater)
-        self._detector = det
-        det.start()
+        print("DEBUG: Detect button clicked")
+        from core.sip_alg_detector import detect_sip_alg
+
+        target_ip = "192.81.82.254"
+        target_port = 5060
+
+        result = detect_sip_alg(target_ip, target_port)
+
+        # Update UI based on result
+        self.banner.setText("SIP ALG\n" + result)
+
+        if result == "SIP ALG is NOT detected":
+            self.banner.setStyleSheet("background-color: green; color: white;")
+
+        elif result == "SIP ALG detected":
+            self.banner.setStyleSheet("background-color: red; color: white;")
+
+        else:
+            self.banner.setStyleSheet("background-color: orange; color: black;")
 
     def _on_result(self, payload: dict) -> None:
         self._apply_banner(payload)

@@ -2,6 +2,7 @@ import ipaddress
 import re
 import socket
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -23,6 +24,17 @@ from PySide6.QtWidgets import (
 )
 
 from core.scanner import scan_network
+
+
+def _subprocess_no_window_kwargs() -> dict:
+    if sys.platform == "win32":
+        kwargs: dict = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
+        kwargs["startupinfo"] = startupinfo
+        return kwargs
+    return {}
 
 
 class _HostnameEmitter(QObject):
@@ -53,6 +65,7 @@ class _HostnameTask(QRunnable):
                     text=True,
                     timeout=2,
                     check=False,
+                    **_subprocess_no_window_kwargs(),
                 )
                 output = (proc.stdout or "") + "\n" + (proc.stderr or "")
                 for line in output.splitlines():
@@ -163,10 +176,10 @@ class ScannerView(QWidget):
                 "Auto",
                 "Custom",
                 "All Common Ranges",
-                "192.168.0.1/24",
-                "192.168.1.1/24",
-                "10.0.0.1/24",
-                "172.16.0.1/24",
+                "192.168.0.1-254",
+                "192.168.1.1-254",
+                "10.0.0.1-254",
+                "172.16.0.1-254",
             ]
         )
 
@@ -265,6 +278,20 @@ class ScannerView(QWidget):
         self.results_table.customContextMenuRequested.connect(self._show_results_context_menu)
         self._on_scan_mode_changed()
 
+    @staticmethod
+    def _cidr_to_host_range(cidr: str) -> str:
+        """Convert '192.168.68.0/24' to '192.168.68.1-254' display format."""
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+            hosts = list(net.hosts())
+            if not hosts:
+                return cidr
+            first = str(hosts[0])
+            last_octet = str(hosts[-1]).split(".")[-1]
+            return f"{first}-{last_octet}"
+        except Exception:
+            return cidr
+
     def _detect_local_cidr(self) -> str:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -274,9 +301,9 @@ class ScannerView(QWidget):
             finally:
                 s.close()
             net = ipaddress.ip_network(f"{local_ip}/24", strict=False)
-            return str(net)
+            return self._cidr_to_host_range(str(net))
         except Exception:
-            return "192.168.1.0/24"
+            return "192.168.1.1-254"
 
     def _on_scan_all_toggled(self, checked: bool) -> None:
         self.scan_all_subnets = bool(checked)
@@ -285,7 +312,7 @@ class ScannerView(QWidget):
         mode = self.scan_mode_combo.currentText()
         if mode == "Custom":
             self.scan_range_input.setReadOnly(False)
-            self.scan_range_input.setPlaceholderText("e.g. 192.168.1.1–254, 10.0.0.1–254")
+            self.scan_range_input.setPlaceholderText("e.g. 192.168.1.1-254, 10.0.0.1-254")
             self.scan_range_input.setFocus()
             self.scan_all_checkbox.setVisible(False)
             return
@@ -298,12 +325,13 @@ class ScannerView(QWidget):
             return
         if mode == "All Common Ranges":
             self.scan_range_input.setText(
-                "192.168.0.1/24, 192.168.1.1/24, 10.0.0.1/24, 172.16.0.1/24"
+                "192.168.0.1-254, 192.168.1.1-254, 10.0.0.1-254, 172.16.0.1-254"
             )
             return
         self.scan_range_input.setText(mode)
 
     def _parse_subnets_for_scan(self) -> list[str]:
+        """Parse the range input into a list of CIDR strings for scanning."""
         raw = self.scan_range_input.text().strip()
         if not raw:
             return []
@@ -312,19 +340,22 @@ class ScannerView(QWidget):
             token = part.strip()
             if not token:
                 continue
-            token = token.replace("–", "-")
+            token = token.replace("\u2013", "-").replace("\u2014", "-")  # en-dash, em-dash
             if "-" in token and "/" not in token:
+                # Format: "192.168.68.1-254" → extract base IP, build /24
                 left = token.split("-", 1)[0].strip()
                 try:
+                    # Validate it's a real IP
+                    ipaddress.ip_address(left)
                     net = ipaddress.ip_network(f"{left}/24", strict=False)
                     subnets.append(str(net))
                     continue
-                except Exception:
+                except (ValueError, Exception):
                     continue
             try:
                 net = ipaddress.ip_network(token, strict=False)
                 subnets.append(str(net))
-            except Exception:
+            except (ValueError, Exception):
                 continue
         return subnets
 
@@ -491,6 +522,8 @@ class ScannerView(QWidget):
         self._scan_worker = None
         self._scan_thread = None
         self.results_table.setSortingEnabled(self._sorting_was_enabled)
+        # Sort by IP address column (column 1) ascending
+        self.results_table.sortByColumn(1, Qt.AscendingOrder)
 
     def _start_hostname_lookup(self, ip: str) -> None:
         if ip in self._hostname_pending:
