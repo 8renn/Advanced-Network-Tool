@@ -74,6 +74,9 @@ class SipAlgView(QWidget):
 
         self.run_button = QPushButton("Run Detection", top)
         self.run_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.run_button.setMinimumHeight(40)
+        self.run_button.setMinimumWidth(140)
+        self.run_button.setStyleSheet("font-size: 14px; font-weight: 600; padding: 6px 16px;")
         top_layout.addWidget(self.run_button)
         top_layout.addStretch(1)
 

@@ -182,18 +182,29 @@ class ScannerView(QWidget):
                 "172.16.0.1-254",
             ]
         )
+        self.scan_mode_combo.setMinimumHeight(40)
+        self.scan_mode_combo.setStyleSheet("font-size: 14px; padding: 4px 8px;")
 
         self.scan_range_input = QLineEdit(top_bar)
         self.scan_range_input.setPlaceholderText("Scan range (e.g. 192.168.1.0/24)")
         self.scan_range_input.setClearButtonEnabled(True)
         self.scan_range_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.scan_range_input.setMinimumWidth(260)
+        self.scan_range_input.setMinimumHeight(40)
+        self.scan_range_input.setStyleSheet("font-size: 14px; padding: 4px 8px;")
 
         self.scan_button = QPushButton("Scan", top_bar)
+        self.scan_button.setMinimumHeight(40)
+        self.scan_button.setMinimumWidth(80)
+        self.scan_button.setStyleSheet("font-size: 14px; font-weight: 600; padding: 4px 12px;")
         self.stop_button = QPushButton("Stop", top_bar)
+        self.stop_button.setMinimumHeight(40)
+        self.stop_button.setMinimumWidth(80)
+        self.stop_button.setStyleSheet("font-size: 14px; font-weight: 600; padding: 4px 12px;")
         self.stop_button.setEnabled(False)
 
         self.scan_all_checkbox = QCheckBox("All Subnets", top_bar)
+        self.scan_all_checkbox.setStyleSheet("font-size: 14px;")
         self.scan_all_checkbox.setVisible(False)
         self.scan_all_checkbox.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
@@ -459,7 +470,6 @@ class ScannerView(QWidget):
         self.results_table.setSortingEnabled(False)
         self.scan_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        QGuiApplication.setOverrideCursor(Qt.WaitCursor)
 
         thread = QThread(self)
         worker = _ScanWorker(subnets)
@@ -516,7 +526,6 @@ class ScannerView(QWidget):
         self.status_label.setText(f"Error - {message}")
 
     def _on_scan_finished(self) -> None:
-        QGuiApplication.restoreOverrideCursor()
         self.scan_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self._scan_worker = None

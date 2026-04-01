@@ -41,7 +41,7 @@ class _SystemInfoRefreshThread(QThread):
                         "jitter": "Unavailable",
                         "status": "Failed",
                     },
-                    "ookla": {
+                    "google": {
                         "download": "Unavailable",
                         "upload": "Unavailable",
                         "latency": "Unavailable",
@@ -125,13 +125,13 @@ class SystemInfoView(QWidget):
         self.cf_card, self._cf_labels, self._cf_status = self._make_speed_card(
             "Cloudflare (speed.cloudflare.com endpoints)"
         )
-        self.ookla_card, self._ookla_labels, self._ookla_status = self._make_speed_card(
-            "Ookla Speedtest (CLI)"
+        self.google_card, self._google_labels, self._google_status = self._make_speed_card(
+            "Google (dl.google.com CDN)"
         )
 
         inner_layout.addWidget(self.network_card)
         inner_layout.addWidget(self.cf_card)
-        inner_layout.addWidget(self.ookla_card)
+        inner_layout.addWidget(self.google_card)
         inner_layout.addStretch(1)
 
         root.addWidget(top_bar)
@@ -201,7 +201,7 @@ class SystemInfoView(QWidget):
 
         self._apply_card_shell(self.network_card)
         self._apply_card_shell(self.cf_card)
-        self._apply_card_shell(self.ookla_card)
+        self._apply_card_shell(self.google_card)
 
         self._start_refresh()
 
@@ -278,9 +278,9 @@ class SystemInfoView(QWidget):
             vl.setText(str(data.get(key, "Unavailable")))
 
         cf = data.get("cloudflare") or {}
-        ok = data.get("ookla") or {}
+        goog = data.get("google") or {}
         self._apply_speed_panel(self._cf_labels, self._cf_status, cf, ookla=False)
-        self._apply_speed_panel(self._ookla_labels, self._ookla_status, ok, ookla=True)
+        self._apply_speed_panel(self._google_labels, self._google_status, goog, ookla=False)
 
     def _apply_speed_panel(
         self,

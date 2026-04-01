@@ -5,9 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import math
-import os
 import re
-import shutil
 import socket
 import ssl
 import statistics
@@ -29,7 +27,16 @@ PUBLIC_IP_TIMEOUT = 6.0
 # Cloudflare rejects some large ?bytes= values with HTTP 403; stay under ~11–12M.
 _CF_DOWNLOAD_BYTE_CANDIDATES = (10_485_760, 8_000_000, 5_000_000, 2_500_000, 1_000_000)
 CF_TEST_TIMEOUT = 90.0
-OOKLA_TIMEOUT = 180.0
+# Google speed test endpoints
+# dl.google.com hosts large files for Chrome/Android; stable URLs, global CDN.
+_GOOGLE_DOWNLOAD_URLS = [
+    "https://dl.google.com/dl/android/studio/install/2024.2.1.11/android-studio-2024.2.1.11-windows.exe",
+    "https://dl.google.com/chrome/install/ChromeStandaloneSetup64.exe",
+]
+_GOOGLE_DOWNLOAD_BYTES = 10_000_000  # Read up to 10MB then stop (enough to measure speed)
+_GOOGLE_LATENCY_HOST = "8.8.8.8"
+_GOOGLE_LATENCY_PORT = 443
+GOOGLE_TEST_TIMEOUT = 60.0
 
 _CF_REQ_HEADERS = {
     "User-Agent": USER_AGENT,
@@ -60,7 +67,7 @@ class SystemInfoSnapshot:
     adapter_name: str = "Unavailable"
     adapter_ipv4: str = "Unavailable"
     cloudflare: SpeedTestPanel = field(default_factory=SpeedTestPanel)
-    ookla: SpeedTestPanel = field(default_factory=SpeedTestPanel)
+    google: SpeedTestPanel = field(default_factory=SpeedTestPanel)
     error: str = ""
 
 
@@ -462,200 +469,83 @@ def run_cloudflare_speedtest() -> SpeedTestPanel:
     return panel
 
 
-def _bps_from_ookla_download_field(raw: Any) -> float:
-    """Ookla nested objects use bandwidth in bytes/sec; speedtest-cli uses bits/sec at top level."""
-    if isinstance(raw, dict):
-        bw = raw.get("bandwidth")
-        if isinstance(bw, (int, float)) and bw > 0:
-            return float(bw) * 8.0
-    if isinstance(raw, (int, float)) and raw > 0:
-        return float(raw)
-    return 0.0
+def run_google_speedtest() -> SpeedTestPanel:
+    """
+    Measure download speed from Google's CDN and latency to Google DNS.
+    Pure Python — no external binary needed.
+    """
+    panel = SpeedTestPanel(status="Failed")
+    ctx = ssl.create_default_context()
 
-
-def _parse_ookla_dict(data: dict[str, Any]) -> SpeedTestPanel | None:
-    if not isinstance(data, dict):
-        return None
-
-    d_bps = _bps_from_ookla_download_field(data.get("download"))
-    u_bps = _bps_from_ookla_download_field(data.get("upload"))
-
-    ping_raw = data.get("ping")
-    lat: float | None = None
-    jit: float | None = None
-    if isinstance(ping_raw, dict):
-        if isinstance(ping_raw.get("latency"), (int, float)):
-            lat = float(ping_raw["latency"])
-        if isinstance(ping_raw.get("jitter"), (int, float)):
-            jit = float(ping_raw["jitter"])
-    elif isinstance(ping_raw, (int, float)):
-        lat = float(ping_raw)
-    if jit is None and isinstance(data.get("jitter"), (int, float)):
-        jit = float(data["jitter"])
-
-    panel = SpeedTestPanel(status="Completed")
-    panel.download = _format_mbps(d_bps) if d_bps > 0 else "Unavailable"
-    panel.upload = _format_mbps(u_bps) if u_bps > 0 else "Unavailable"
-    panel.latency = f"{lat:.1f} ms" if lat is not None else "Unavailable"
-    panel.jitter = f"{jit:.2f} ms" if jit is not None else "Unavailable"
-    return panel
-
-
-def _parse_ookla_stdout(stdout: str, stderr: str) -> SpeedTestPanel | None:
-    """Official Ookla CLI often prints JSONL (one object per line); last `type==result` wins."""
-    text = (stdout or "").strip()
-    if not text:
-        logger.debug("Ookla CLI empty stdout; stderr=%s", (stderr or "")[:400])
-        return None
-
+    # --- Latency & Jitter (TCP connect to Google DNS on port 443) ---
+    lat_samples: list[float] = []
     try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            parsed = _parse_ookla_dict(data)
-            if parsed:
-                return parsed
-    except json.JSONDecodeError:
-        pass
+        for _ in range(15):
+            t0 = time.perf_counter()
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5.0)
+            try:
+                s.connect((_GOOGLE_LATENCY_HOST, _GOOGLE_LATENCY_PORT))
+                lat_samples.append((time.perf_counter() - t0) * 1000.0)
+            finally:
+                s.close()
+            time.sleep(0.05)
+    except (OSError, socket.timeout) as e:
+        logger.debug("Google latency probe failed: %s", e)
 
-    result_line: dict[str, Any] | None = None
-    last_obj: dict[str, Any] | None = None
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    if len(lat_samples) >= 3:
+        med_lat = statistics.median(lat_samples)
+        jit = _jitter_from_ms(lat_samples)
+        panel.latency = f"{med_lat:.1f} ms"
+        panel.jitter = f"{jit:.2f} ms"
+
+    # --- Download (stream from Google CDN, measure throughput) ---
+    dl_bps = 0.0
+    for url in _GOOGLE_DOWNLOAD_URLS:
         try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
+            headers = {
+                "User-Agent": USER_AGENT,
+                "Accept": "*/*",
+                "Accept-Encoding": "identity",
+            }
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            t0 = time.perf_counter()
+            total_bytes = 0
+            with urllib.request.urlopen(req, timeout=GOOGLE_TEST_TIMEOUT, context=ctx) as resp:
+                while total_bytes < _GOOGLE_DOWNLOAD_BYTES:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+            elapsed = time.perf_counter() - t0
+
+            if elapsed > 0.1 and total_bytes > 100_000:
+                dl_bps = (total_bytes * 8) / elapsed
+                panel.download = _format_mbps(dl_bps)
+                break
+        except (urllib.error.URLError, OSError) as e:
+            logger.debug("Google download from %s failed: %s", url, e)
             continue
-        if isinstance(obj, dict):
-            last_obj = obj
-            if obj.get("type") == "result":
-                result_line = obj
-    if result_line is not None:
-        return _parse_ookla_dict(result_line)
-    if last_obj is not None and (
-        "download" in last_obj or "upload" in last_obj or "ping" in last_obj
+
+    if panel.download == "Unavailable" and dl_bps == 0.0:
+        panel.download = "Unavailable"
+
+    # --- Upload (POST to httpbin or Google — limited, so measure what we can) ---
+    # Google doesn't offer a public upload endpoint like Cloudflare does.
+    # Use a TCP throughput estimation based on the download connection instead.
+    # Mark upload as N/A for the Google test since there's no reliable public POST endpoint.
+    panel.upload = "N/A (Google test)"
+
+    # --- Status ---
+    if (
+        panel.download != "Unavailable"
+        or panel.latency != "Unavailable"
     ):
-        return _parse_ookla_dict(last_obj)
-    return None
+        panel.status = "Completed"
+    else:
+        panel.status = "Failed"
 
-
-def _ookla_official_candidates() -> list[str]:
-    """PATH + common Windows install locations for Ookla Speedtest CLI."""
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for name in ("speedtest.exe", "speedtest"):
-        found = shutil.which(name)
-        if found and os.path.isfile(found):
-            key = os.path.normcase(os.path.abspath(found))
-            if key not in seen:
-                seen.add(key)
-                ordered.append(found)
-    if sys.platform == "win32":
-        for env_key in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
-            base = os.environ.get(env_key)
-            if not base:
-                continue
-            for tail in (
-                os.path.join(base, "Speedtest", "speedtest.exe"),
-                os.path.join(base, "Ookla Speedtest", "speedtest.exe"),
-            ):
-                if os.path.isfile(tail):
-                    key = os.path.normcase(os.path.abspath(tail))
-                    if key not in seen:
-                        seen.add(key)
-                        ordered.append(tail)
-    return ordered
-
-
-def _run_speedtest_executable(exe: str) -> SpeedTestPanel | None:
-    """
-    Run either Ookla Speedtest CLI (-f json + license flags) or speedtest-cli (--json).
-    Pip installs often expose `speedtest.exe` that only supports the latter.
-    """
-    variants = (
-        ["--accept-license", "--accept-gdpr", "-f", "json"],
-        ["--json"],
-    )
-    last_failure: SpeedTestPanel | None = None
-    for argv_suffix in variants:
-        try:
-            proc = subprocess.run(
-                [exe, *argv_suffix],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=OOKLA_TIMEOUT,
-                check=False,
-                **_subprocess_no_window_kwargs(),
-            )
-        except FileNotFoundError:
-            logger.debug("Speedtest executable missing at path: %s", exe)
-            return None
-        except subprocess.TimeoutExpired:
-            logger.debug("Speedtest CLI timed out: %s", exe)
-            return SpeedTestPanel(status="Failed")
-
-        out = (proc.stdout or "").strip()
-        err = (proc.stderr or "").strip()
-        if proc.returncode != 0:
-            logger.debug(
-                "Speedtest %s %s rc=%s stderr=%s",
-                exe,
-                argv_suffix[0],
-                proc.returncode,
-                err[:600] if err else "(empty)",
-            )
-
-        win_missing = sys.platform == "win32" and proc.returncode == 9009
-        if win_missing or (
-            proc.returncode != 0
-            and "not recognized" in ((err + out).lower())
-            and not out
-        ):
-            return None
-
-        parsed = _parse_ookla_stdout(out, err)
-        if parsed:
-            parsed.status = "Completed"
-            return parsed
-
-        if err and ("403" in err or "Forbidden" in err):
-            logger.debug("Speedtest blocked or forbidden (403): %s", exe)
-            return SpeedTestPanel(status="Unavailable")
-
-        if out or proc.returncode != 0:
-            last_failure = SpeedTestPanel(status="Failed")
-
-    if last_failure is not None:
-        logger.debug(
-            "No parseable JSON from %s after trying Ookla and speedtest-cli modes",
-            exe,
-        )
-        return last_failure
-    return SpeedTestPanel(status="Failed")
-
-
-def run_ookla_speedtest() -> SpeedTestPanel:
-    """Ookla Speedtest CLI and/or speedtest-cli (JSON or JSONL), via PATH and common paths."""
-    missing = SpeedTestPanel(status="Not Installed")
-
-    for exe in _ookla_official_candidates():
-        result = _run_speedtest_executable(exe)
-        if result is not None:
-            return result
-
-    for cli in filter(
-        None,
-        (shutil.which("speedtest-cli"), shutil.which("speedtest-cli.exe")),
-    ):
-        result = _run_speedtest_executable(cli)
-        if result is not None:
-            return result
-
-    logger.debug("No speedtest / speedtest.exe / speedtest-cli found")
-    return missing
+    return panel
 
 
 def collect_full_snapshot(
@@ -686,9 +576,9 @@ def collect_full_snapshot(
         except Exception:
             snap.cloudflare = SpeedTestPanel(status="Failed")
         try:
-            snap.ookla = run_ookla_speedtest()
+            snap.google = run_google_speedtest()
         except Exception:
-            snap.ookla = SpeedTestPanel(status="Failed")
+            snap.google = SpeedTestPanel(status="Failed")
 
     return snap
 
@@ -710,12 +600,12 @@ def snapshot_to_dict(s: SystemInfoSnapshot) -> dict[str, Any]:
             "jitter": s.cloudflare.jitter,
             "status": s.cloudflare.status,
         },
-        "ookla": {
-            "download": s.ookla.download,
-            "upload": s.ookla.upload,
-            "latency": s.ookla.latency,
-            "jitter": s.ookla.jitter,
-            "status": s.ookla.status,
+        "google": {
+            "download": s.google.download,
+            "upload": s.google.upload,
+            "latency": s.google.latency,
+            "jitter": s.google.jitter,
+            "status": s.google.status,
         },
         "error": s.error,
     }

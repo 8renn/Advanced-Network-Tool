@@ -173,7 +173,7 @@ class FullReportView(QWidget):
             # Speed tests
             for label, speed_labels_attr, status_attr in [
                 ("Cloudflare", "_cf_labels", "_cf_status"),
-                ("Ookla", "_ookla_labels", "_ookla_status"),
+                ("Google", "_google_labels", "_google_status"),
             ]:
                 lines.append("")
                 lines.append(f"  Speed Test — {label}:")

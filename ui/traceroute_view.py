@@ -34,9 +34,17 @@ class TracerouteView(QWidget):
         self.target_input.setClearButtonEnabled(True)
         self.target_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.target_input.setMinimumWidth(260)
+        self.target_input.setMinimumHeight(40)
+        self.target_input.setStyleSheet("font-size: 14px; padding: 4px 8px;")
 
         self.start_button = QPushButton("Start", top_bar)
+        self.start_button.setMinimumHeight(40)
+        self.start_button.setMinimumWidth(80)
+        self.start_button.setStyleSheet("font-size: 14px; font-weight: 600; padding: 4px 12px;")
         self.stop_button = QPushButton("Stop", top_bar)
+        self.stop_button.setMinimumHeight(40)
+        self.stop_button.setMinimumWidth(80)
+        self.stop_button.setStyleSheet("font-size: 14px; font-weight: 600; padding: 4px 12px;")
         self.stop_button.setEnabled(False)
 
         top_layout.addWidget(self.target_input, 1)
@@ -123,7 +131,6 @@ class TracerouteView(QWidget):
         self.status_label.setText("Tracing route...")
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        QGuiApplication.setOverrideCursor(Qt.WaitCursor)
 
         worker = TracerouteWorker(target, self)
         worker.hop_signal.connect(self._on_hop)
@@ -156,7 +163,6 @@ class TracerouteView(QWidget):
             self.status_label.setText(message)
 
     def _on_thread_finished(self) -> None:
-        QGuiApplication.restoreOverrideCursor()
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self._worker = None
