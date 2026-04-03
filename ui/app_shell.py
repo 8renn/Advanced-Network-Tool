@@ -82,9 +82,9 @@ class AppShellWindow(QMainWindow):
         ),
         "settings": (
             "Adjust app-level preferences and defaults.\n\n"
-            "• Save theme, density, and startup page behavior\n"
-            "• Control window restore/maximize behavior\n"
-            "• Configure MTR defaults and runtime toggles"
+            "• Save startup page and window behavior\n"
+            "• Configure MTR defaults and runtime toggles\n"
+            "• Customize dashboard card order"
         ),
     }
     _DASHBOARD_CARDS: list[tuple[str, str, str]] = [
@@ -106,210 +106,35 @@ class AppShellWindow(QMainWindow):
         "full_report": 6,
         "settings": 7,
     }
-    _THEMES: dict[str, dict[str, str]] = {
-        "blue": {
-            "main_bg": "#171c3a",
-            "sidebar_bg": "#252c5a",
-            "sidebar_border": "#2e376d",
-            "nav_text": "#d6dcff",
-            "nav_bg": "#2e376d",
-            "nav_border": "#39437b",
-            "nav_hover": "#384381",
-            "content_bg": "#1d2450",
-            "header_bg": "#212959",
-            "header_border": "#2c356b",
-            "card_bg": "#252d61",
-            "card_border": "#313b75",
-            "accent_1": "#3ec9d3",
-            "accent_2": "#5d85ff",
-            "logo_color": "#6b9eff",
-            "logo_dot": "#4a5a8a",
-            "subtitle_color": "#6b7aaa",
-            "version_text": "#5b9bd5",
-            "version_bg": "#2e376d",
-            "version_border": "#39437b",
-            "header_info": "#8b97c9",
-            "card_title": "#eef2ff",
-            "card_subtitle": "#aab3de",
-            "card_value": "#9aaad4",
-            "tooltip_bg": "#1a2040",
-            "tooltip_text": "#e0e6ff",
-            "tooltip_border": "#3a4581",
-        },
-        "dark": {
-            "main_bg": "#10131f",
-            "sidebar_bg": "#151b2d",
-            "sidebar_border": "#232b44",
-            "nav_text": "#d7def7",
-            "nav_bg": "#1c243b",
-            "nav_border": "#2c385a",
-            "nav_hover": "#293455",
-            "content_bg": "#0f1426",
-            "header_bg": "#171f38",
-            "header_border": "#2a3558",
-            "card_bg": "#161e37",
-            "card_border": "#2a3558",
-            "accent_1": "#3ec9d3",
-            "accent_2": "#5d85ff",
-            "logo_color": "#6b9eff",
-            "logo_dot": "#3a4868",
-            "subtitle_color": "#5a6a8a",
-            "version_text": "#5b9bd5",
-            "version_bg": "#1c243b",
-            "version_border": "#2c385a",
-            "header_info": "#7a88b0",
-            "card_title": "#e0e8ff",
-            "card_subtitle": "#8a96c0",
-            "card_value": "#8090b8",
-            "tooltip_bg": "#141828",
-            "tooltip_text": "#d0d8f0",
-            "tooltip_border": "#2a3558",
-        },
-        "midnight": {
-            "main_bg": "#0d0b1a",
-            "sidebar_bg": "#16102e",
-            "sidebar_border": "#2a1f50",
-            "nav_text": "#d4ccf0",
-            "nav_bg": "#1e1540",
-            "nav_border": "#302360",
-            "nav_hover": "#2a1d55",
-            "content_bg": "#110e22",
-            "header_bg": "#1a1435",
-            "header_border": "#2d2258",
-            "card_bg": "#1a1438",
-            "card_border": "#2d2258",
-            "accent_1": "#a855f7",
-            "accent_2": "#6d28d9",
-            "logo_color": "#b07aff",
-            "logo_dot": "#5a3d8a",
-            "subtitle_color": "#7a6aaa",
-            "version_text": "#b07aff",
-            "version_bg": "#1e1540",
-            "version_border": "#302360",
-            "header_info": "#8a7ab8",
-            "card_title": "#ede5ff",
-            "card_subtitle": "#a899d0",
-            "card_value": "#9585c0",
-            "tooltip_bg": "#16102e",
-            "tooltip_text": "#e0d8f8",
-            "tooltip_border": "#3a2d68",
-        },
-        "green": {
-            "main_bg": "#0a120a",
-            "sidebar_bg": "#0f1e10",
-            "sidebar_border": "#1a3518",
-            "nav_text": "#c8f0c8",
-            "nav_bg": "#142a14",
-            "nav_border": "#1e4020",
-            "nav_hover": "#1a3a1a",
-            "content_bg": "#0c160c",
-            "header_bg": "#122012",
-            "header_border": "#1e3820",
-            "card_bg": "#122012",
-            "card_border": "#1e3820",
-            "accent_1": "#22c55e",
-            "accent_2": "#16a34a",
-            "logo_color": "#4ade80",
-            "logo_dot": "#2d6a3e",
-            "subtitle_color": "#5a8a5a",
-            "version_text": "#4ade80",
-            "version_bg": "#142a14",
-            "version_border": "#1e4020",
-            "header_info": "#78aa78",
-            "card_title": "#e0ffe0",
-            "card_subtitle": "#88c088",
-            "card_value": "#78b078",
-            "tooltip_bg": "#0f1e10",
-            "tooltip_text": "#d0f0d0",
-            "tooltip_border": "#2a5030",
-        },
-        "teal": {
-            "main_bg": "#0a1518",
-            "sidebar_bg": "#0f2028",
-            "sidebar_border": "#183540",
-            "nav_text": "#c8ecf0",
-            "nav_bg": "#142830",
-            "nav_border": "#1e4048",
-            "nav_hover": "#1a3840",
-            "content_bg": "#0c1820",
-            "header_bg": "#122028",
-            "header_border": "#1e3840",
-            "card_bg": "#122028",
-            "card_border": "#1e3840",
-            "accent_1": "#2dd4bf",
-            "accent_2": "#0891b2",
-            "logo_color": "#5eead4",
-            "logo_dot": "#2d6a6a",
-            "subtitle_color": "#5a8a90",
-            "version_text": "#5eead4",
-            "version_bg": "#142830",
-            "version_border": "#1e4048",
-            "header_info": "#78aab0",
-            "card_title": "#e0fffa",
-            "card_subtitle": "#88c0c0",
-            "card_value": "#78b0b0",
-            "tooltip_bg": "#0f2028",
-            "tooltip_text": "#d0f0f0",
-            "tooltip_border": "#2a5058",
-        },
-        "light": {
-            "main_bg": "#f0f2f5",
-            "sidebar_bg": "#ffffff",
-            "sidebar_border": "#e0e4ea",
-            "nav_text": "#3a4260",
-            "nav_bg": "#f0f2f8",
-            "nav_border": "#dce0ec",
-            "nav_hover": "#e4e8f4",
-            "content_bg": "#f5f7fa",
-            "header_bg": "#ffffff",
-            "header_border": "#e0e4ea",
-            "card_bg": "#ffffff",
-            "card_border": "#e0e4ea",
-            "accent_1": "#0ea5e9",
-            "accent_2": "#3b82f6",
-            "logo_color": "#2563eb",
-            "logo_dot": "#94a3b8",
-            "subtitle_color": "#64748b",
-            "version_text": "#2563eb",
-            "version_bg": "#eff6ff",
-            "version_border": "#bfdbfe",
-            "header_info": "#64748b",
-            "card_title": "#1e293b",
-            "card_subtitle": "#64748b",
-            "card_value": "#475569",
-            "tooltip_bg": "#1e293b",
-            "tooltip_text": "#f1f5f9",
-            "tooltip_border": "#334155",
-        },
-        "rose": {
-            "main_bg": "#1a0f14",
-            "sidebar_bg": "#28141e",
-            "sidebar_border": "#40202e",
-            "nav_text": "#f0d0dc",
-            "nav_bg": "#301828",
-            "nav_border": "#4a2838",
-            "nav_hover": "#3a2030",
-            "content_bg": "#1e1018",
-            "header_bg": "#261420",
-            "header_border": "#3e2030",
-            "card_bg": "#261420",
-            "card_border": "#3e2030",
-            "accent_1": "#f43f5e",
-            "accent_2": "#e11d48",
-            "logo_color": "#fb7185",
-            "logo_dot": "#8a3a50",
-            "subtitle_color": "#aa6a7a",
-            "version_text": "#fb7185",
-            "version_bg": "#301828",
-            "version_border": "#4a2838",
-            "header_info": "#b87888",
-            "card_title": "#ffe0e8",
-            "card_subtitle": "#c08898",
-            "card_value": "#b07888",
-            "tooltip_bg": "#28141e",
-            "tooltip_text": "#f8e0e8",
-            "tooltip_border": "#582838",
-        },
+    # Single shipped theme: dark blue (no runtime theme switching).
+    _PALETTE: dict[str, str] = {
+        "main_bg": "#171c3a",
+        "sidebar_bg": "#252c5a",
+        "sidebar_border": "#2e376d",
+        "nav_text": "#d6dcff",
+        "nav_bg": "#2e376d",
+        "nav_border": "#39437b",
+        "nav_hover": "#384381",
+        "content_bg": "#1d2450",
+        "header_bg": "#212959",
+        "header_border": "#2c356b",
+        "card_bg": "#252d61",
+        "card_border": "#313b75",
+        "accent_1": "#3ec9d3",
+        "accent_2": "#5d85ff",
+        "logo_color": "#6b9eff",
+        "logo_dot": "#4a5a8a",
+        "subtitle_color": "#6b7aaa",
+        "version_text": "#5b9bd5",
+        "version_bg": "#2e376d",
+        "version_border": "#39437b",
+        "header_info": "#8b97c9",
+        "card_title": "#eef2ff",
+        "card_subtitle": "#aab3de",
+        "card_value": "#9aaad4",
+        "tooltip_bg": "#1a2040",
+        "tooltip_text": "#e0e6ff",
+        "tooltip_border": "#3a4581",
     }
 
     def __init__(self) -> None:
@@ -996,8 +821,7 @@ class AppShellWindow(QMainWindow):
             self._help_dot.setVisible(False)
 
     def _apply_styles(self) -> None:
-        theme = self.settings.get("appearance", {}).get("theme", "blue")
-        palette = self._palette_for_theme(theme)
+        palette = self._PALETTE
         self.setStyleSheet(
             """
             QMainWindow {
@@ -1088,7 +912,7 @@ class AppShellWindow(QMainWindow):
         self._apply_accent_colors(palette)
 
     def _apply_accent_colors(self, palette: dict[str, str]) -> None:
-        """Re-apply inline styles that depend on the current theme accent colors."""
+        """Re-apply inline styles that depend on accent colors (dark blue palette)."""
         # Logo text
         self._logo_text.setTextFormat(Qt.RichText)
         self._logo_text.setText(
@@ -1130,12 +954,9 @@ class AppShellWindow(QMainWindow):
             "padding: 12px 16px; font-size: 13px; font-family: 'Segoe UI', sans-serif; }" % palette
         )
 
-    def _palette_for_theme(self, theme: str) -> dict[str, str]:
-        return self._THEMES.get(theme, self._THEMES["blue"])
-
     def _apply_settings_to_views(self, settings: dict) -> None:
         self._apply_mtr_defaults(settings)
-        self._apply_density(settings)
+        self._apply_sidebar_metrics()
 
     def _apply_mtr_defaults(self, settings: dict) -> None:
         defaults = settings.get("mtr_defaults", {})
@@ -1146,10 +967,10 @@ class AppShellWindow(QMainWindow):
         except Exception:
             pass
 
-    def _apply_density(self, settings: dict) -> None:
-        density = settings.get("appearance", {}).get("density", "comfortable")
-        button_height = {"compact": 38, "comfortable": 44, "wide": 50}.get(density, 44)
-        sidebar_spacing = {"compact": 8, "comfortable": 12, "wide": 16}.get(density, 12)
+    def _apply_sidebar_metrics(self) -> None:
+        """Fixed sidebar nav sizing (formerly tied to layout density setting)."""
+        button_height = 44
+        sidebar_spacing = 12
         for btn in self.nav_buttons.values():
             btn.setMinimumHeight(button_height)
         parent_layout = self.nav_buttons["dashboard"].parentWidget().layout()

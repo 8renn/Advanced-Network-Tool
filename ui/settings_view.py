@@ -78,7 +78,6 @@ class SettingsView(QWidget):
         inner_layout.setContentsMargins(0, 0, 8, 0)
         inner_layout.setSpacing(12)
 
-        inner_layout.addWidget(self._build_appearance_card())
         inner_layout.addWidget(self._build_startup_card())
         inner_layout.addWidget(self._build_window_card())
         inner_layout.addWidget(self._build_mtr_card())
@@ -215,31 +214,6 @@ class SettingsView(QWidget):
         lbl = QLabel(text, self)
         lbl.setObjectName("settingsLabel")
         return lbl
-
-    def _build_appearance_card(self) -> QFrame:
-        card, grid = self._build_card(
-            "Appearance",
-            "Theme and layout spacing preferences.",
-        )
-        theme = QComboBox(card)
-        theme.addItem("Blue (default)", "blue")
-        theme.addItem("Dark", "dark")
-        theme.addItem("Midnight", "midnight")
-        theme.addItem("Green", "green")
-        theme.addItem("Teal", "teal")
-        theme.addItem("Light", "light")
-        theme.addItem("Rose", "rose")
-        density = QComboBox(card)
-        density.addItem("Compact", "compact")
-        density.addItem("Comfortable", "comfortable")
-        density.addItem("Wide", "wide")
-        self._controls["appearance.theme"] = theme
-        self._controls["appearance.density"] = density
-        grid.addWidget(self._row_label("Theme"), 0, 0)
-        grid.addWidget(theme, 0, 1)
-        grid.addWidget(self._row_label("Layout density"), 1, 0)
-        grid.addWidget(density, 1, 1)
-        return card
 
     def _build_startup_card(self) -> QFrame:
         card, grid = self._build_card(
@@ -379,8 +353,6 @@ class SettingsView(QWidget):
             order_list.addItem(item)
 
     def load_from_settings(self, settings: dict[str, Any]) -> None:
-        self._set_combo_by_data("appearance.theme", str(settings["appearance"]["theme"]))
-        self._set_combo_by_data("appearance.density", str(settings["appearance"]["density"]))
         self._set_combo_by_data("startup.default_page", str(settings["startup"]["default_page"]))
 
         self._controls["window.remember_geometry"].setChecked(
@@ -430,10 +402,6 @@ class SettingsView(QWidget):
 
     def _collect_payload(self) -> dict[str, Any]:
         return {
-            "appearance": {
-                "theme": self._controls["appearance.theme"].currentData(),
-                "density": self._controls["appearance.density"].currentData(),
-            },
             "startup": {
                 "default_page": self._controls["startup.default_page"].currentData(),
             },

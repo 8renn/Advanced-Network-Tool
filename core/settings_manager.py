@@ -9,10 +9,6 @@ from core.runtime_paths import user_data_dir
 
 
 DEFAULT_SETTINGS: dict[str, Any] = {
-    "appearance": {
-        "theme": "blue",
-        "density": "comfortable",
-    },
     "startup": {
         "default_page": "dashboard",
     },

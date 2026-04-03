@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" IgnorableNamespaces="rescap">
+  <Identity Name="AdvancedNetworkTool" Publisher="CN=A9748F72-78ED-4A66-9BCF-B23777D5B6CF" Version="1.0.1.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>Advanced Network Tool</DisplayName>
+    <PublisherDisplayName>8renn</PublisherDisplayName>
+    <Description>Advanced network diagnostic tool with IP scanning, MTR, traceroute, SIP ALG detection, and system info.</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22000.1" />
+  </Dependencies>
+  <Applications>
+    <Application Id="App" Executable="AdvancedNetworkTool.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Advanced Network Tool" Description="Advanced network diagnostic tool" BackgroundColor="#1a1a2e" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <Capability Name="internetClientServer" />
+    <Capability Name="privateNetworkClientServer" />
+    <rescap:Capability Name="runFullTrust" />
+    <DeviceCapability Name="wiFiControl" />
+  </Capabilities>
+</Package>

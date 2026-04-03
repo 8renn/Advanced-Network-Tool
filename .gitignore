@@ -2,9 +2,7 @@
 build/
 dist/
 release/
-
-# PyInstaller
-*.spec
+msix-staging/
 
 # Python cache
 __pycache__/
@@ -26,3 +24,6 @@ advanced_ip_scanner.log
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Certificates
+*.pfx
