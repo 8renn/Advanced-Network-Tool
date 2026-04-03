@@ -56,8 +56,8 @@ class _HostnameTask(QRunnable):
         except Exception:
             name = "Unknown"
 
-        # Fallback: NetBIOS name via nbtstat if DNS is unknown.
-        if name == "Unknown":
+        # Fallback: NetBIOS name via nbtstat if DNS is unknown (Windows only).
+        if name == "Unknown" and sys.platform == "win32":
             try:
                 proc = subprocess.run(
                     ["nbtstat", "-A", self._ip],

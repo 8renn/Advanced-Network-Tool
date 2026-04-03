@@ -1,3 +1,5 @@
+import sys
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -34,7 +36,7 @@ class _SystemInfoRefreshThread(QThread):
                     "public_ip": "Unavailable",
                     "adapter_name": "Unavailable",
                     "adapter_ipv4": "Unavailable",
-                    "cloudflare": {
+                    "ookla": {
                         "download": "Unavailable",
                         "upload": "Unavailable",
                         "latency": "Unavailable",
@@ -122,15 +124,15 @@ class SystemInfoView(QWidget):
         net_grid.setColumnStretch(1, 1)
         self.network_card.layout().addLayout(net_grid)
 
-        self.cf_card, self._cf_labels, self._cf_status = self._make_speed_card(
-            "Cloudflare (speed.cloudflare.com endpoints)"
+        self.ookla_card, self._ookla_labels, self._ookla_status = self._make_speed_card(
+            "Ookla Speedtest"
         )
         self.google_card, self._google_labels, self._google_status = self._make_speed_card(
-            "Google (dl.google.com CDN)"
+            "Google Speedtest"
         )
 
         inner_layout.addWidget(self.network_card)
-        inner_layout.addWidget(self.cf_card)
+        inner_layout.addWidget(self.ookla_card)
         inner_layout.addWidget(self.google_card)
         inner_layout.addStretch(1)
 
@@ -200,7 +202,7 @@ class SystemInfoView(QWidget):
         )
 
         self._apply_card_shell(self.network_card)
-        self._apply_card_shell(self.cf_card)
+        self._apply_card_shell(self.ookla_card)
         self._apply_card_shell(self.google_card)
 
         self._start_refresh()
@@ -277,33 +279,28 @@ class SystemInfoView(QWidget):
         for key, (_, vl) in self._net_labels.items():
             vl.setText(str(data.get(key, "Unavailable")))
 
-        cf = data.get("cloudflare") or {}
-        goog = data.get("google") or {}
-        self._apply_speed_panel(self._cf_labels, self._cf_status, cf, ookla=False)
-        self._apply_speed_panel(self._google_labels, self._google_status, goog, ookla=False)
+        ookla = data.get("ookla") or {}
+        google = data.get("google") or {}
+        self._apply_speed_panel(self._ookla_labels, self._ookla_status, ookla)
+        self._apply_speed_panel(self._google_labels, self._google_status, google)
 
     def _apply_speed_panel(
         self,
         labels: dict[str, QLabel],
         status: QLabel,
         panel: dict,
-        *,
-        ookla: bool,
     ) -> None:
         st = str(panel.get("status") or "Unavailable")
         if st in ("ok", "Completed"):
             status.setText("Completed")
         elif st == "Not Installed":
-            if ookla:
-                status.setText(
-                    "Not installed — add Ookla Speedtest CLI or speedtest-cli to PATH"
-                )
+            if sys.platform == "darwin":
+                # macOS: Ookla CLI is `speedtest`, not speedtest.exe
+                status.setText("Not installed — speedtest not found in PATH or assets")
             else:
-                status.setText("Not installed")
+                status.setText("Not installed — speedtest.exe not found in assets")
         elif st == "Failed":
             status.setText("Failed")
-        elif st == "Unavailable":
-            status.setText("Unavailable")
         else:
             status.setText(st)
 

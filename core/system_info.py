@@ -6,6 +6,7 @@ import ipaddress
 import json
 import math
 import re
+import shutil
 import socket
 import ssl
 import statistics
@@ -15,34 +16,25 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from core.logger import logger
+from core.runtime_paths import resource_path
 
 USER_AGENT = "Advanced-IP-Scanner/1.0 (System Info)"
-CF_DOWN = "https://speed.cloudflare.com/__down"
-CF_UP = "https://speed.cloudflare.com/__up"
 PUBLIC_IP_URL = "https://api.ipify.org?format=json"
 PUBLIC_IP_TIMEOUT = 6.0
-# Cloudflare rejects some large ?bytes= values with HTTP 403; stay under ~11–12M.
-_CF_DOWNLOAD_BYTE_CANDIDATES = (10_485_760, 8_000_000, 5_000_000, 2_500_000, 1_000_000)
-CF_TEST_TIMEOUT = 90.0
 # Google speed test endpoints
 # dl.google.com hosts large files for Chrome/Android; stable URLs, global CDN.
 _GOOGLE_DOWNLOAD_URLS = [
     "https://dl.google.com/dl/android/studio/install/2024.2.1.11/android-studio-2024.2.1.11-windows.exe",
     "https://dl.google.com/chrome/install/ChromeStandaloneSetup64.exe",
 ]
-_GOOGLE_DOWNLOAD_BYTES = 10_000_000  # Read up to 10MB then stop (enough to measure speed)
+_GOOGLE_DOWNLOAD_BYTES = 50_000_000  # Read up to 50MB for accurate measurement on fast connections
 _GOOGLE_LATENCY_HOST = "8.8.8.8"
 _GOOGLE_LATENCY_PORT = 443
 GOOGLE_TEST_TIMEOUT = 60.0
-
-_CF_REQ_HEADERS = {
-    "User-Agent": USER_AGENT,
-    "Accept": "*/*",
-    "Accept-Encoding": "identity",
-}
 
 
 @dataclass
@@ -66,14 +58,21 @@ class SystemInfoSnapshot:
     public_ip: str = "Unavailable"
     adapter_name: str = "Unavailable"
     adapter_ipv4: str = "Unavailable"
-    cloudflare: SpeedTestPanel = field(default_factory=SpeedTestPanel)
+    ookla: SpeedTestPanel = field(default_factory=SpeedTestPanel)
     google: SpeedTestPanel = field(default_factory=SpeedTestPanel)
     error: str = ""
 
 
 def _subprocess_no_window_kwargs() -> dict[str, Any]:
     if sys.platform == "win32":
-        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+        kwargs: dict[str, Any] = {
+            "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        }
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        kwargs["startupinfo"] = si
+        return kwargs
     return {}
 
 
@@ -352,127 +351,202 @@ def _format_mbps(bits_per_sec: float) -> str:
     return f"{mbps:.2f} Mbps"
 
 
-def _cf_download_bytes(ctx: ssl.SSLContext, byte_size: int) -> tuple[float, int]:
-    """Return (elapsed_seconds, total_bytes_read). Raises on HTTP/network errors."""
-    url = f"{CF_DOWN}?bytes={byte_size}"
-    t0 = time.perf_counter()
-    req = urllib.request.Request(
-        url,
-        headers=dict(_CF_REQ_HEADERS),
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=CF_TEST_TIMEOUT, context=ctx) as resp:
-        total = 0
-        chunk = 256 * 1024
-        while True:
-            block = resp.read(chunk)
-            if not block:
-                break
-            total += len(block)
-    return time.perf_counter() - t0, total
+def _find_speedtest_exe() -> str | None:
+    """Find the bundled or installed speedtest CLI executable."""
+    if sys.platform == "darwin":
+        # macOS: Unix CLI `speedtest` + optional assets/speedtest bundle
+        bundled_unix = resource_path("assets/speedtest")
+        if bundled_unix.is_file():
+            return str(bundled_unix)
+        project_unix = Path(__file__).resolve().parents[1] / "assets" / "speedtest"
+        if project_unix.is_file():
+            return str(project_unix)
+        found = shutil.which("speedtest")
+        if found:
+            return found
+        return None
+
+    # Check bundled location first (assets/speedtest.exe)
+    bundled = resource_path("assets/speedtest.exe")
+    if bundled.exists():
+        return str(bundled)
+
+    # Check project assets folder (dev mode)
+    project_assets = Path(__file__).resolve().parents[1] / "assets" / "speedtest.exe"
+    if project_assets.exists():
+        return str(project_assets)
+
+    # Check PATH
+    found = shutil.which("speedtest.exe") or shutil.which("speedtest")
+    if found:
+        return found
+
+    return None
 
 
-def run_cloudflare_speedtest() -> SpeedTestPanel:
+def run_ookla_speedtest() -> SpeedTestPanel:
     """
-    Measure against Cloudflare's public __down / __up endpoints (same hosts as speed.cloudflare.com).
-    Large ?bytes= values can return HTTP 403; we try several sizes under Cloudflare's cap.
+    Run Ookla Speedtest CLI and parse JSON output.
+    Returns accurate download, upload, latency, and jitter.
     """
     panel = SpeedTestPanel(status="Failed")
-    ctx = ssl.create_default_context()
-    lat_samples: list[float] = []
 
-    try:
-        for _ in range(18):
-            url = f"{CF_DOWN}?bytes=0"
-            t0 = time.perf_counter()
-            req = urllib.request.Request(
-                url,
-                headers=dict(_CF_REQ_HEADERS),
-                method="GET",
-            )
-            with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-                resp.read()
-            lat_samples.append((time.perf_counter() - t0) * 1000.0)
-    except (urllib.error.URLError, OSError) as e:
-        logger.debug("Cloudflare latency probe failed: %s", e)
-        panel.status = "Unavailable"
+    exe = _find_speedtest_exe()
+    if exe is None:
+        logger.debug("Ookla: speedtest.exe not found")
+        panel.status = "Not Installed"
         return panel
 
-    if len(lat_samples) < 3:
-        panel.status = "Failed"
-        return panel
-
-    med_lat = statistics.median(lat_samples)
-    jit = _jitter_from_ms(lat_samples)
-    panel.latency = f"{med_lat:.1f} ms"
-    panel.jitter = f"{jit:.2f} ms"
-
-    dl_bps = 0.0
-    last_dl_err: str | None = None
-    for byte_size in _CF_DOWNLOAD_BYTE_CANDIDATES:
-        try:
-            elapsed, total = _cf_download_bytes(ctx, byte_size)
-            if elapsed > 0.05 and total > 0:
-                dl_bps = (total * 8) / elapsed
-                panel.download = _format_mbps(dl_bps)
-                break
-        except urllib.error.HTTPError as e:
-            last_dl_err = f"HTTP {e.code}"
-            logger.debug(
-                "Cloudflare download bytes=%s failed: HTTP %s", byte_size, e.code
-            )
-            if e.code == 403:
-                continue
-            panel.download = "Unavailable"
-            break
-        except (urllib.error.URLError, OSError) as e:
-            last_dl_err = str(e)
-            logger.debug("Cloudflare download bytes=%s failed: %s", byte_size, e)
-            panel.download = "Unavailable"
-            break
-    else:
-        if last_dl_err:
-            logger.debug("Cloudflare download exhausted sizes; last error: %s", last_dl_err)
-        panel.download = "Unavailable"
-
-    ul_bps = 0.0
     try:
-        ubytes = 5_000_000
-        body = b"\x00" * ubytes
-        t0 = time.perf_counter()
-        headers = dict(_CF_REQ_HEADERS)
-        headers["Content-Type"] = "application/octet-stream"
-        req = urllib.request.Request(
-            CF_UP,
-            data=body,
-            headers=headers,
-            method="POST",
+        result = subprocess.run(
+            [exe, "--accept-license", "--accept-gdpr", "-f", "json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            check=False,
+            **_subprocess_no_window_kwargs(),
         )
-        with urllib.request.urlopen(req, timeout=CF_TEST_TIMEOUT, context=ctx) as resp:
-            resp.read()
-        elapsed = time.perf_counter() - t0
-        if elapsed > 0.05:
-            ul_bps = (len(body) * 8) / elapsed
-        panel.upload = _format_mbps(ul_bps)
-    except (urllib.error.URLError, OSError) as e:
-        logger.debug("Cloudflare upload failed: %s", e)
-        panel.upload = "Unavailable"
-
-    if (
-        panel.download != "Unavailable"
-        or panel.upload != "Unavailable"
-        or panel.latency != "Unavailable"
-    ):
-        panel.status = "Completed"
-    else:
+    except FileNotFoundError:
+        panel.status = "Not Installed"
+        return panel
+    except subprocess.TimeoutExpired:
         panel.status = "Failed"
+        return panel
+
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        logger.debug("Ookla: empty output, stderr=%s", (result.stderr or "")[:400])
+        panel.status = "Failed"
+        return panel
+
+    # Parse JSON — Ookla CLI may output JSONL (one object per line), last type==result wins
+    data: dict[str, Any] | None = None
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        # Try JSONL format
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    if obj.get("type") == "result" or "download" in obj:
+                        data = obj
+                        break
+            except json.JSONDecodeError:
+                continue
+
+    if not data:
+        logger.debug("Ookla: no parseable JSON output")
+        panel.status = "Failed"
+        return panel
+
+    # Parse download (bits per second or nested dict)
+    dl_raw = data.get("download")
+    if isinstance(dl_raw, dict):
+        dl_bps = float(dl_raw.get("bandwidth", 0)) * 8  # bandwidth is bytes/sec
+    elif isinstance(dl_raw, (int, float)):
+        dl_bps = float(dl_raw)
+    else:
+        dl_bps = 0.0
+    if dl_bps > 0:
+        panel.download = _format_mbps(dl_bps)
+
+    # Parse upload
+    ul_raw = data.get("upload")
+    if isinstance(ul_raw, dict):
+        ul_bps = float(ul_raw.get("bandwidth", 0)) * 8
+    elif isinstance(ul_raw, (int, float)):
+        ul_bps = float(ul_raw)
+    else:
+        ul_bps = 0.0
+    if ul_bps > 0:
+        panel.upload = _format_mbps(ul_bps)
+
+    # Parse latency
+    ping_raw = data.get("ping")
+    if isinstance(ping_raw, dict):
+        lat = ping_raw.get("latency")
+        jit = ping_raw.get("jitter")
+    elif isinstance(ping_raw, (int, float)):
+        lat = float(ping_raw)
+        jit = data.get("jitter")
+    else:
+        lat = None
+        jit = None
+
+    if lat is not None:
+        panel.latency = f"{float(lat):.1f} ms"
+    if jit is not None:
+        panel.jitter = f"{float(jit):.2f} ms"
+
+    if panel.download != "Unavailable" or panel.upload != "Unavailable":
+        panel.status = "Completed"
+
     return panel
+
+
+def _has_curl() -> bool:
+    """Check if curl is available on the system."""
+    try:
+        curl_cmd = "curl.exe" if sys.platform == "win32" else "curl"
+        result = subprocess.run(
+            [curl_cmd, "--version"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+            **_subprocess_no_window_kwargs(),
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _curl_download_speed(url: str, duration: float = 6.0) -> float:
+    """
+    Measure download speed using curl. Returns bits per second.
+    """
+    try:
+        curl_cmd = "curl.exe" if sys.platform == "win32" else "curl"
+        cmd = [
+            curl_cmd,
+            "--silent",
+            "--output",
+            "NUL" if sys.platform == "win32" else "/dev/null",
+            "--max-time",
+            str(int(duration)),
+            "--write-out",
+            "%{size_download}",
+            url,
+        ]
+        t0 = time.perf_counter()
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=duration + 10,
+            check=False,
+            **_subprocess_no_window_kwargs(),
+        )
+        elapsed = time.perf_counter() - t0
+        output = (result.stdout or "").strip()
+        if output and elapsed > 0.1:
+            downloaded = float(output)
+            if downloaded > 0:
+                return (downloaded * 8) / elapsed
+    except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+        logger.debug("curl download speed failed: %s", e)
+    return 0.0
 
 
 def run_google_speedtest() -> SpeedTestPanel:
     """
     Measure download speed from Google's CDN and latency to Google DNS.
-    Pure Python — no external binary needed.
+    Uses curl for download when available, urllib fallback; TCP connect for latency.
     """
     panel = SpeedTestPanel(status="Failed")
     ctx = ssl.create_default_context()
@@ -499,52 +573,43 @@ def run_google_speedtest() -> SpeedTestPanel:
         panel.latency = f"{med_lat:.1f} ms"
         panel.jitter = f"{jit:.2f} ms"
 
-    # --- Download (stream from Google CDN, measure throughput) ---
-    dl_bps = 0.0
-    for url in _GOOGLE_DOWNLOAD_URLS:
-        try:
-            headers = {
-                "User-Agent": USER_AGENT,
-                "Accept": "*/*",
-                "Accept-Encoding": "identity",
-            }
-            req = urllib.request.Request(url, headers=headers, method="GET")
-            t0 = time.perf_counter()
-            total_bytes = 0
-            with urllib.request.urlopen(req, timeout=GOOGLE_TEST_TIMEOUT, context=ctx) as resp:
-                while total_bytes < _GOOGLE_DOWNLOAD_BYTES:
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    total_bytes += len(chunk)
-            elapsed = time.perf_counter() - t0
-
-            if elapsed > 0.1 and total_bytes > 100_000:
-                dl_bps = (total_bytes * 8) / elapsed
+    # --- Download (curl for accuracy, urllib fallback) ---
+    use_curl = _has_curl()
+    if use_curl:
+        for url in _GOOGLE_DOWNLOAD_URLS:
+            dl_bps = _curl_download_speed(url, duration=8.0)
+            if dl_bps > 0:
                 panel.download = _format_mbps(dl_bps)
                 break
-        except (urllib.error.URLError, OSError) as e:
-            logger.debug("Google download from %s failed: %s", url, e)
-            continue
+        else:
+            panel.download = "Unavailable"
+    else:
+        for url in _GOOGLE_DOWNLOAD_URLS:
+            try:
+                headers = {"User-Agent": USER_AGENT, "Accept": "*/*", "Accept-Encoding": "identity"}
+                req = urllib.request.Request(url, headers=headers, method="GET")
+                t0 = time.perf_counter()
+                total_bytes = 0
+                with urllib.request.urlopen(req, timeout=GOOGLE_TEST_TIMEOUT, context=ctx) as resp:
+                    while total_bytes < _GOOGLE_DOWNLOAD_BYTES:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        total_bytes += len(chunk)
+                elapsed = time.perf_counter() - t0
+                if elapsed > 0.1 and total_bytes > 500_000:
+                    panel.download = _format_mbps((total_bytes * 8) / elapsed)
+                    break
+            except (urllib.error.URLError, OSError) as e:
+                logger.debug("Google download from %s failed: %s", url, e)
+                continue
 
-    if panel.download == "Unavailable" and dl_bps == 0.0:
-        panel.download = "Unavailable"
+    panel.upload = "N/A"
 
-    # --- Upload (POST to httpbin or Google — limited, so measure what we can) ---
-    # Google doesn't offer a public upload endpoint like Cloudflare does.
-    # Use a TCP throughput estimation based on the download connection instead.
-    # Mark upload as N/A for the Google test since there's no reliable public POST endpoint.
-    panel.upload = "N/A (Google test)"
-
-    # --- Status ---
-    if (
-        panel.download != "Unavailable"
-        or panel.latency != "Unavailable"
-    ):
+    if panel.download != "Unavailable" or panel.latency != "Unavailable":
         panel.status = "Completed"
     else:
         panel.status = "Failed"
-
     return panel
 
 
@@ -572,9 +637,9 @@ def collect_full_snapshot(
 
     if include_speedtests:
         try:
-            snap.cloudflare = run_cloudflare_speedtest()
+            snap.ookla = run_ookla_speedtest()
         except Exception:
-            snap.cloudflare = SpeedTestPanel(status="Failed")
+            snap.ookla = SpeedTestPanel(status="Failed")
         try:
             snap.google = run_google_speedtest()
         except Exception:
@@ -593,12 +658,12 @@ def snapshot_to_dict(s: SystemInfoSnapshot) -> dict[str, Any]:
         "public_ip": s.public_ip,
         "adapter_name": s.adapter_name,
         "adapter_ipv4": s.adapter_ipv4,
-        "cloudflare": {
-            "download": s.cloudflare.download,
-            "upload": s.cloudflare.upload,
-            "latency": s.cloudflare.latency,
-            "jitter": s.cloudflare.jitter,
-            "status": s.cloudflare.status,
+        "ookla": {
+            "download": s.ookla.download,
+            "upload": s.ookla.upload,
+            "latency": s.ookla.latency,
+            "jitter": s.ookla.jitter,
+            "status": s.ookla.status,
         },
         "google": {
             "download": s.google.download,

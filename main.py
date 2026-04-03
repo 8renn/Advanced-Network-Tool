@@ -5,7 +5,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from ui.app_shell import AppShellWindow
-from ui.launcher import LauncherWindow, _is_installed
+from ui.launcher import LauncherWindow
 
 
 def main() -> int:
@@ -17,17 +17,16 @@ def main() -> int:
     else:
         base_path = Path(__file__).resolve().parent
 
-    icon_path = base_path / "assets" / "app.ico"
-    if icon_path.exists():
-        app.setWindowIcon(QIcon(str(icon_path)))
+    if sys.platform == "darwin":
+        # macOS: .icns if present; else bundle icon from .app
+        icns_path = base_path / "assets" / "app.icns"
+        if icns_path.exists():
+            app.setWindowIcon(QIcon(str(icns_path)))
+    else:
+        icon_path = base_path / "assets" / "app.ico"
+        if icon_path.exists():
+            app.setWindowIcon(QIcon(str(icon_path)))
 
-    # If already installed or dev mode, skip launcher and go straight to app
-    if _is_installed() or not getattr(sys, "frozen", False):
-        window = AppShellWindow()
-        window.show()
-        return app.exec()
-
-    # First launch / portable: show the launcher screen
     launcher = LauncherWindow()
 
     def _open_app() -> None:

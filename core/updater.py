@@ -98,6 +98,16 @@ def fetch_latest_release(repo: str = GITHUB_REPO) -> ReleaseInfo | None:
 
 
 def pick_update_asset(release: ReleaseInfo) -> AssetInfo | None:
+    if sys.platform == "darwin":
+        # macOS: no auto-update; user installs from GitHub releases
+        logger.info(
+            "Updater: Auto-update is not available on macOS. "
+            "Please download the latest version from GitHub."
+        )
+        return None
+    if sys.platform != "win32":
+        return None
+
     exe_assets = [a for a in release.assets if a.name.lower().endswith(".exe")]
     if not exe_assets:
         return None
@@ -173,6 +183,9 @@ def _write_swap_script(old_exe: Path, new_exe: Path, script_dir: Path) -> Path:
 
 
 def apply_portable_update(downloaded_exe: Path) -> bool:
+    if sys.platform != "win32":
+        return False
+
     current = _running_exe_path()
     if current is None:
         logger.info("Updater: portable apply skipped (not frozen/dev mode)")
@@ -193,6 +206,9 @@ def apply_portable_update(downloaded_exe: Path) -> bool:
 
 
 def apply_installer_update(installer_path: Path) -> bool:
+    if sys.platform != "win32":
+        return False
+
     detached = getattr(subprocess, "DETACHED_PROCESS", 0)
     subprocess.Popen(
         [str(installer_path)],
@@ -203,6 +219,9 @@ def apply_installer_update(installer_path: Path) -> bool:
 
 
 def apply_update(downloaded_path: Path, asset: AssetInfo) -> bool:
+    if sys.platform != "win32":
+        return False
+
     name = asset.name.lower()
     if "setup" in name or "install" in name:
         return apply_installer_update(downloaded_path)

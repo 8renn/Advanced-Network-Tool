@@ -24,21 +24,7 @@ from core.updater import (
     apply_update,
     pick_update_asset,
 )
-from core.version import APP_NAME, __version__
-
-
-def _is_installed() -> bool:
-    if not getattr(sys, "frozen", False):
-        return False
-    marker = Path(sys.executable).resolve().parent / ".installed"
-    return marker.exists()
-
-
-def _mark_installed() -> None:
-    if not getattr(sys, "frozen", False):
-        return
-    marker = Path(sys.executable).resolve().parent / ".installed"
-    marker.write_text("1", encoding="utf-8")
+from core.version import APP_NAME, DIST_CHANNEL, __version__
 
 
 class LauncherWindow(QWidget):
@@ -137,41 +123,6 @@ class LauncherWindow(QWidget):
         update_layout.addLayout(update_btn_row)
         card_layout.addWidget(self.update_frame)
 
-        self.choose_frame = QWidget(card)
-        self.choose_frame.setVisible(False)
-        choose_layout = QVBoxLayout(self.choose_frame)
-        choose_layout.setContentsMargins(0, 4, 0, 0)
-        choose_layout.setSpacing(10)
-
-        choose_hint = QLabel("Choose how you would like to proceed:", self.choose_frame)
-        choose_hint.setObjectName("chooseHint")
-        choose_hint.setAlignment(Qt.AlignCenter)
-        choose_layout.addWidget(choose_hint)
-
-        choose_btn_row = QHBoxLayout()
-        choose_btn_row.setSpacing(12)
-        self.install_btn = QPushButton("Install", self.choose_frame)
-        self.install_btn.setObjectName("btnPrimary")
-        self.install_btn.setMinimumSize(140, 42)
-        self.run_btn = QPushButton("Run", self.choose_frame)
-        self.run_btn.setObjectName("btnSecondary")
-        self.run_btn.setMinimumSize(140, 42)
-        choose_btn_row.addStretch(1)
-        choose_btn_row.addWidget(self.install_btn)
-        choose_btn_row.addWidget(self.run_btn)
-        choose_btn_row.addStretch(1)
-        choose_layout.addLayout(choose_btn_row)
-
-        install_hint = QLabel(
-            "Install — adds shortcuts and enables auto-updates\n"
-            "Run — launches immediately without installing",
-            self.choose_frame,
-        )
-        install_hint.setObjectName("installHint")
-        install_hint.setAlignment(Qt.AlignCenter)
-        choose_layout.addWidget(install_hint)
-        card_layout.addWidget(self.choose_frame)
-
         card_layout.addStretch(1)
         footer = QLabel("© 2025 Advanced Network Tool", card)
         footer.setObjectName("launcherFooter")
@@ -182,8 +133,6 @@ class LauncherWindow(QWidget):
 
         self.download_btn.clicked.connect(self._on_download_clicked)
         self.skip_btn.clicked.connect(self._show_choose_phase)
-        self.install_btn.clicked.connect(self._on_install_clicked)
-        self.run_btn.clicked.connect(self._on_run_clicked)
 
         self.setStyleSheet(
             """
@@ -274,14 +223,6 @@ class LauncherWindow(QWidget):
             #btnSecondary:hover {
                 background: #384381;
             }
-            #chooseHint {
-                color: #a0acd4;
-                font-size: 13px;
-            }
-            #installHint {
-                color: #6b7aaa;
-                font-size: 11px;
-            }
             #launcherFooter {
                 color: #3e4870;
                 font-size: 10px;
@@ -310,6 +251,15 @@ class LauncherWindow(QWidget):
         super().mouseMoveEvent(event)
 
     def _start_init(self) -> None:
+        if DIST_CHANNEL == "msstore":
+            # Microsoft Store handles updates — skip GitHub check, just launch
+            self.status_lbl.setText("Initializing…")
+            self.progress.setVisible(True)
+            self.progress.setRange(0, 0)
+            QTimer.singleShot(1500, self._auto_launch)
+            return
+
+        # GitHub channel — check for updates
         self.status_lbl.setText("Checking for updates…")
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
@@ -348,7 +298,6 @@ class LauncherWindow(QWidget):
     def _show_update_phase(self, release: ReleaseInfo) -> None:
         self.progress.setVisible(False)
         self.update_frame.setVisible(True)
-        self.choose_frame.setVisible(False)
         self.status_lbl.setText("Update available.")
         self.update_title.setText(f"Version {release.version} is available")
         notes = (release.body or "").strip()
@@ -358,9 +307,13 @@ class LauncherWindow(QWidget):
 
     def _show_choose_phase(self) -> None:
         self.update_frame.setVisible(False)
-        self.choose_frame.setVisible(True)
         self.progress.setVisible(False)
-        self.status_lbl.setText("Ready to go.")
+        self.status_lbl.setText("Launching…")
+        QTimer.singleShot(500, self._auto_launch)
+
+    def _auto_launch(self) -> None:
+        self.launch_app.emit()
+        self.close()
 
     def _on_download_clicked(self) -> None:
         if self._release is None:
@@ -368,7 +321,16 @@ class LauncherWindow(QWidget):
             return
         self._update_asset = pick_update_asset(self._release)
         if self._update_asset is None:
-            self.status_lbl.setText("No compatible .exe update asset found.")
+            if sys.platform == "win32":
+                self.status_lbl.setText("No compatible .exe update asset found.")
+            elif sys.platform == "darwin":
+                # macOS: in-app update not supported
+                self.status_lbl.setText(
+                    "Auto-update is not available on macOS. "
+                    "Please download the latest version from GitHub."
+                )
+            else:
+                self.status_lbl.setText("No compatible update asset found.")
             return
 
         self.download_btn.setEnabled(False)
@@ -439,12 +401,3 @@ class LauncherWindow(QWidget):
         self.skip_btn.setEnabled(True)
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-
-    def _on_install_clicked(self) -> None:
-        _mark_installed()
-        self.launch_app.emit()
-        self.close()
-
-    def _on_run_clicked(self) -> None:
-        self.launch_app.emit()
-        self.close()
