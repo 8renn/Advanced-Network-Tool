@@ -1,5 +1,6 @@
 # Advanced Network Tool — runtime dependencies
 PySide6>=6.5.0,<7
+netifaces>=0.11.0; sys_platform == "darwin"
 
 # PyInstaller (macOS/Windows CI builds; install when packaging)
 pyinstaller>=6.0.0

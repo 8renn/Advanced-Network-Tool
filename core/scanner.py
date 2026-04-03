@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Generator
 
 from core.runtime_paths import resource_path
+from core.system_info import collect_local_network
+
+# TCP ports for macOS fallback when ICMP does not get a reply (Angry IP Scanner–style).
+_DARWIN_TCP_PROBE_PORTS = (80, 443, 22, 445)
 
 
 def _subprocess_no_window_kwargs() -> dict:
@@ -86,13 +90,81 @@ def lookup_vendor(mac: str) -> str:
     return _VENDOR_BY_OUI.get(mac_hex[:6], "Unknown")
 
 
+def _udp_local_ipv4() -> str | None:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return None
+
+
+def _darwin_cidr_via_netifaces() -> str | None:
+    try:
+        import netifaces
+    except ImportError:
+        return None
+    try:
+        gateways = netifaces.gateways()
+        default = gateways.get("default", {})
+        row = default.get(netifaces.AF_INET)
+        if not row:
+            return None
+        default_iface = row[1]
+        addrs = netifaces.ifaddresses(default_iface)
+        inet_rows = addrs.get(netifaces.AF_INET) or []
+        if not inet_rows:
+            return None
+        ip = (inet_rows[0].get("addr") or "").strip()
+        netmask = (inet_rows[0].get("netmask") or "").strip()
+        if not ip or not netmask:
+            return None
+        iface = ipaddress.IPv4Interface(f"{ip}/{netmask}")
+        return str(iface.network)
+    except (KeyError, ValueError, TypeError, ipaddress.AddressValueError, OSError):
+        return None
+
+
+def get_local_ipv4_scan_cidr() -> str:
+    """
+    Return the local IPv4 subnet as CIDR (e.g. 192.168.1.0/24).
+    On macOS, prefers netifaces on the default route interface, then route/ifconfig (collect_local_network).
+    Windows/Linux: ipconfig/PowerShell or ip route; falls back to /24.
+    """
+    if sys.platform == "darwin":
+        cidr = _darwin_cidr_via_netifaces()
+        if cidr:
+            return cidr
+    net = collect_local_network()
+    ip = (net.get("primary_local_ipv4") or "").strip()
+    mask = (net.get("subnet_mask") or "").strip()
+    if ip and ip != "Unavailable" and mask and mask != "Unavailable":
+        try:
+            iface = ipaddress.IPv4Interface(f"{ip}/{mask}")
+            return str(iface.network)
+        except (ValueError, ipaddress.AddressValueError):
+            pass
+    lip = _udp_local_ipv4()
+    if lip:
+        try:
+            return str(ipaddress.ip_network(f"{lip}/24", strict=False))
+        except (ValueError, ipaddress.AddressValueError):
+            pass
+    return "192.168.1.0/24"
+
+
 def _ping_host(ip: str, timeout_ms: int = 500) -> bool:
     """Ping a single host. Returns True if alive. Populates OS ARP cache as side effect."""
     try:
         if sys.platform == "win32":
             cmd = ["ping", "-n", "1", "-w", str(timeout_ms), str(ip)]
         elif sys.platform == "darwin":
-            cmd = ["ping", "-c", "1", "-W", "1000", str(ip)]  # macOS: -W is milliseconds
+            # macOS: -W is milliseconds; keep bounded so scans finish promptly
+            wait_ms = max(200, min(int(timeout_ms), 3000))
+            cmd = ["ping", "-c", "1", "-W", str(wait_ms), str(ip)]
         else:
             timeout_s = max(1, timeout_ms // 1000)
             cmd = ["ping", "-c", "1", "-W", str(timeout_s), str(ip)]
@@ -121,7 +193,7 @@ def _read_arp_table() -> dict[str, str]:
             check=False,
             **_subprocess_no_window_kwargs(),
         )
-        output = result.stdout or ""
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
 
         if sys.platform == "win32":
             # Windows arp -a format:
@@ -133,11 +205,11 @@ def _read_arp_table() -> dict[str, str]:
                 re.IGNORECASE,
             )
         else:
-            # Linux/Mac arp -a format:
-            #   ? (192.168.68.1) at 2c:4f:52:3c:94:24 [ether] on eth0
+            # BSD/macOS/Linux arp -a variants:
+            #   hostname (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0
             pattern = re.compile(
                 r"\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+"
-                r"([0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2})"
+                r"((?:[0-9a-fA-F]{1,2}[:-]){5}[0-9a-fA-F]{1,2})\b"
             )
 
         for match in pattern.finditer(output):
@@ -187,6 +259,68 @@ def _get_local_mac() -> str:
     return ""
 
 
+def _darwin_local_ip_and_mac() -> tuple[str, str]:
+    """macOS: prefer netifaces on default IPv4 interface; fall back to UDP trick + uuid MAC."""
+    ip = ""
+    mac = ""
+    try:
+        import netifaces
+    except ImportError:
+        netifaces = None  # type: ignore[assignment]
+    if netifaces is not None:
+        try:
+            gateways = netifaces.gateways()
+            default = gateways.get("default", {})
+            row = default.get(netifaces.AF_INET)
+            if row:
+                default_iface = row[1]
+                addrs = netifaces.ifaddresses(default_iface)
+                inet_rows = addrs.get(netifaces.AF_INET) or []
+                if inet_rows:
+                    ip = (inet_rows[0].get("addr") or "").strip()
+                link_rows = addrs.get(netifaces.AF_LINK) or []
+                if link_rows:
+                    raw = (link_rows[0].get("addr") or "").strip()
+                    if raw:
+                        mac = _normalize_mac(raw)
+        except (KeyError, TypeError, ValueError, OSError):
+            pass
+    if not ip:
+        ip = _udp_local_ipv4() or ""
+    if not mac:
+        mac = _get_local_mac()
+    return ip, mac
+
+
+def _darwin_ping_once(ip: str) -> tuple[str, bool]:
+    """macOS: /sbin/ping sweep (no root). -W is milliseconds on Darwin (1000 = 1 s cap per probe)."""
+    try:
+        result = subprocess.run(
+            ["/sbin/ping", "-c", "1", "-W", "1000", str(ip)],
+            capture_output=True,
+            timeout=3,
+            check=False,
+        )
+        return (str(ip), result.returncode == 0)
+    except (subprocess.TimeoutExpired, OSError):
+        return (str(ip), False)
+
+
+def _darwin_tcp_any_port_open(ip: str, timeout_s: float = 0.35) -> bool:
+    for port in _DARWIN_TCP_PROBE_PORTS:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout_s)
+            try:
+                s.connect((ip, port))
+                return True
+            finally:
+                s.close()
+        except OSError:
+            continue
+    return False
+
+
 def _windows_arp_probe(hosts: list[str], already_alive: set[str], max_workers: int = 32) -> None:
     """Send ARP-populating pings for hosts that did not answer ICMP."""
     if sys.platform != "win32":
@@ -216,17 +350,155 @@ def _windows_arp_probe(hosts: list[str], already_alive: set[str], max_workers: i
                 pass
 
 
+def _unix_arp_probe(hosts: list[str], already_alive: set[str], max_workers: int = 32) -> None:
+    """Second ping pass for ping-silent hosts (non-Windows, non-macOS)."""
+    if sys.platform == "win32" or sys.platform == "darwin":
+        return
+    silent_hosts = [ip for ip in hosts if ip not in already_alive]
+    if not silent_hosts:
+        return
+
+    def _arp_ping(ip: str) -> None:
+        _ping_host(ip, timeout_ms=600)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_arp_ping, ip) for ip in silent_hosts[:254]]
+        for f in as_completed(futures):
+            try:
+                f.result()
+            except Exception:
+                pass
+
+
 def _seen_has_ip(seen: set[str], ip: str) -> bool:
     return any(k.split("|", 1)[0] == ip for k in seen)
+
+
+def _scan_network_macos(network: ipaddress.IPv4Network, hosts: list[str]) -> Generator[dict, None, None]:
+    """
+    macOS-only: parallel /sbin/ping sweep, ARP for MACs, TCP connect fallback on common ports.
+    """
+    seen: set[str] = set()
+
+    # Phase 0: local host
+    local_ip, local_mac = _darwin_local_ip_and_mac()
+    try:
+        if (
+            local_ip
+            and local_mac
+            and ipaddress.ip_address(local_ip) in network
+            and local_mac != "00:00:00:00:00:00"
+        ):
+            key = f"{local_ip}|{local_mac}"
+            seen.add(key)
+            yield {"ip": local_ip, "mac": local_mac, "vendor": lookup_vendor(local_mac)}
+    except ValueError:
+        pass
+
+    # Phase 1: existing ARP entries
+    arp_initial = _read_arp_table()
+    for ip, mac in arp_initial.items():
+        try:
+            if ipaddress.ip_address(ip) not in network:
+                continue
+        except ValueError:
+            continue
+        if not mac:
+            continue
+        key = f"{ip}|{mac}"
+        if key not in seen:
+            seen.add(key)
+            yield {"ip": ip, "mac": mac, "vendor": lookup_vendor(mac)}
+
+    # Phase 2: parallel ping sweep (ThreadPoolExecutor, max 50 workers)
+    alive_ips: set[str] = set()
+    max_workers = min(50, max(1, len(hosts)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_darwin_ping_once, ip) for ip in hosts]
+        for fut in as_completed(futures):
+            try:
+                ip, ok = fut.result()
+                if ok:
+                    alive_ips.add(ip)
+            except Exception:
+                pass
+
+    # Phase 3: ARP after ping
+    arp_after_ping = _read_arp_table()
+    for ip, mac in arp_after_ping.items():
+        try:
+            if ipaddress.ip_address(ip) not in network:
+                continue
+        except ValueError:
+            continue
+        if not mac:
+            continue
+        key = f"{ip}|{mac}"
+        if key not in seen:
+            seen.add(key)
+            yield {"ip": ip, "mac": mac, "vendor": lookup_vendor(mac)}
+
+    for ip in alive_ips:
+        if _seen_has_ip(seen, ip):
+            continue
+        mac = arp_after_ping.get(ip, "")
+        if mac:
+            mac = _normalize_mac(mac)
+            key = f"{ip}|{mac}"
+            if key not in seen:
+                seen.add(key)
+                yield {"ip": ip, "mac": mac, "vendor": lookup_vendor(mac)}
+        else:
+            key = f"{ip}|"
+            if key not in seen:
+                seen.add(key)
+                yield {"ip": ip, "mac": "", "vendor": "Unknown"}
+
+    # Phase 4: TCP fallback on 80, 443, 22, 445
+    tcp_candidates = [
+        ip for ip in hosts if ip not in alive_ips and not _seen_has_ip(seen, ip)
+    ]
+    tcp_alive: set[str] = set()
+    if tcp_candidates:
+        tw = min(50, max(1, len(tcp_candidates)))
+
+        def _tcp_probe(ip: str) -> tuple[str, bool]:
+            return (ip, _darwin_tcp_any_port_open(ip))
+
+        with ThreadPoolExecutor(max_workers=tw) as pool:
+            futures = [pool.submit(_tcp_probe, ip) for ip in tcp_candidates]
+            for fut in as_completed(futures):
+                try:
+                    ip, ok = fut.result()
+                    if ok:
+                        tcp_alive.add(ip)
+                except Exception:
+                    pass
+
+    arp_final = _read_arp_table()
+    for ip in tcp_alive:
+        if _seen_has_ip(seen, ip):
+            continue
+        mac = arp_final.get(ip, "")
+        if mac:
+            mac = _normalize_mac(mac)
+            key = f"{ip}|{mac}"
+            if key not in seen:
+                seen.add(key)
+                yield {"ip": ip, "mac": mac, "vendor": lookup_vendor(mac)}
+        else:
+            key = f"{ip}|"
+            if key not in seen:
+                seen.add(key)
+                yield {"ip": ip, "mac": "", "vendor": "Unknown"}
 
 
 def scan_network(cidr: str) -> Generator[dict, None, None]:
     """
     Network scan using ping sweep + ARP table read.
 
-    1. Pings all hosts concurrently to populate OS ARP cache
-    2. Reads ARP table for IP→MAC mappings
-    3. Yields devices as discovered
+    On macOS (Darwin), uses /sbin/ping, ARP, and TCP fallback — see _scan_network_macos.
+    On Windows/Linux, uses the original multi-phase ping + ARP path.
 
     Yields: {"ip": str, "mac": str, "vendor": str}
     """
@@ -236,6 +508,11 @@ def scan_network(cidr: str) -> Generator[dict, None, None]:
     if not hosts:
         return
 
+    if sys.platform == "darwin":
+        yield from _scan_network_macos(network, hosts)
+        return
+
+    # --- Windows and Linux (unchanged strategy vs. prior Windows-focused path) ---
     # Phase 0: Self-discovery — add the local machine
     seen: set[str] = set()
     try:
@@ -286,9 +563,11 @@ def scan_network(cidr: str) -> Generator[dict, None, None]:
             except Exception:
                 pass
 
-    # Phase 2b: Windows ARP probe for ping-silent devices
+    # Phase 2b: Extra pings for ping-silent devices (ARP cache population)
     if sys.platform == "win32":
         _windows_arp_probe(hosts, alive_ips)
+    else:
+        _unix_arp_probe(hosts, alive_ips)
 
     # Phase 3: Read ARP cache again after ping sweep
     arp_after = _read_arp_table()
@@ -302,8 +581,7 @@ def scan_network(cidr: str) -> Generator[dict, None, None]:
         except ValueError:
             continue
 
-    # Phase 4: For alive hosts not yet in ARP table (unlikely but possible),
-    # yield them with MAC if a final ARP read finds one
+    # Phase 4: Alive hosts not yet in ARP table
     arp_final = _read_arp_table()
     for ip in alive_ips:
         if _seen_has_ip(seen, ip):
@@ -315,3 +593,8 @@ def scan_network(cidr: str) -> Generator[dict, None, None]:
             if key not in seen:
                 seen.add(key)
                 yield {"ip": ip, "mac": mac, "vendor": lookup_vendor(mac)}
+        else:
+            key = f"{ip}|"
+            if key not in seen:
+                seen.add(key)
+                yield {"ip": ip, "mac": "", "vendor": "Unknown"}

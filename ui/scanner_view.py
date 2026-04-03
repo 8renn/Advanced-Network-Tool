@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.scanner import scan_network
+from core.scanner import get_local_ipv4_scan_cidr, scan_network
 
 
 def _subprocess_no_window_kwargs() -> dict:
@@ -118,7 +118,7 @@ class _ScanWorker(QObject):
                     mac = str(device.get("mac", "")).upper()
                     vendor = str(device.get("vendor", "Unknown"))
                     key = f"{ip}|{mac}"
-                    if not ip or not mac:
+                    if not ip:
                         continue
                     with seen_lock:
                         if key in seen:
@@ -305,14 +305,8 @@ class ScannerView(QWidget):
 
     def _detect_local_cidr(self) -> str:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-            finally:
-                s.close()
-            net = ipaddress.ip_network(f"{local_ip}/24", strict=False)
-            return self._cidr_to_host_range(str(net))
+            cidr = get_local_ipv4_scan_cidr()
+            return self._cidr_to_host_range(cidr)
         except Exception:
             return "192.168.1.1-254"
 

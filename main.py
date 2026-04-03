@@ -1,3 +1,7 @@
+import os
+import platform
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -8,7 +12,29 @@ from ui.app_shell import AppShellWindow
 from ui.launcher import LauncherWindow
 
 
+def _maybe_macos_relaunch_elevated() -> None:
+    """
+    MTR uses raw ICMP sockets on macOS, which requires root. Prompt via osascript
+    and relaunch with administrator privileges; this process then exits.
+    """
+    if platform.system() != "Darwin" or os.geteuid() == 0:
+        return
+    if getattr(sys, "frozen", False):
+        cmd = shlex.join(sys.argv)
+    else:
+        cmd = shlex.join([sys.executable, *sys.argv])
+    inner = cmd.replace("\\", "\\\\").replace('"', '\\"')
+    script = f'do shell script "{inner}" with administrator privileges'
+    try:
+        subprocess.run(["osascript", "-e", script])
+    except Exception:
+        pass
+    sys.exit()
+
+
 def main() -> int:
+    _maybe_macos_relaunch_elevated()
+
     app = QApplication(sys.argv)
 
     # Set application icon (works for taskbar, window title bar, alt-tab)

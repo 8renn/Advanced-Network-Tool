@@ -251,11 +251,21 @@ def _darwin_default_route_adapter() -> dict[str, str] | None:
             r"inet\s+(\d+\.\d+\.\d+\.\d+)\s+netmask\s+0x([0-9a-fA-F]+)",
             txt,
         )
-        if not m_inet:
-            return None
-        ipv4 = m_inet.group(1)
-        nm_int = int(m_inet.group(2), 16)
-        mask = str(ipaddress.IPv4Address(nm_int))
+        ipv4: str
+        mask: str
+        if m_inet:
+            ipv4 = m_inet.group(1)
+            nm_int = int(m_inet.group(2), 16)
+            mask = str(ipaddress.IPv4Address(nm_int))
+        else:
+            m_dotted = re.search(
+                r"inet\s+(\d+\.\d+\.\d+\.\d+)\s+netmask\s+(\d+\.\d+\.\d+\.\d+)",
+                txt,
+            )
+            if not m_dotted:
+                return None
+            ipv4 = m_dotted.group(1)
+            mask = m_dotted.group(2)
         mac = "Unavailable"
         m_mac = re.search(r"ether\s+([0-9a-fA-F:]+)", txt)
         if m_mac:

@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.scanner import scan_network
+from core.scanner import get_local_ipv4_scan_cidr, scan_network
 
 
 class _HostnameEmitter(QObject):
@@ -107,7 +107,7 @@ class _ScanWorker(QObject):
                     mac = str(device.get("mac", "")).upper()
                     vendor = str(device.get("vendor", "Unknown"))
                     key = f"{ip}|{mac}"
-                    if not ip or not mac:
+                    if not ip:
                         continue
                     with seen_lock:
                         if key in seen:
@@ -251,18 +251,11 @@ class MainWindow(QMainWindow):
 
     def _detect_local_cidr(self) -> str:
         """
-        Best-effort local /24 detection for UI autofill.
+        Best-effort local subnet for UI autofill (OS-specific mask when available).
         Must fail silently and fall back to a common default.
         """
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-            finally:
-                s.close()
-            net = ipaddress.ip_network(f"{local_ip}/24", strict=False)
-            return str(net)
+            return get_local_ipv4_scan_cidr()
         except Exception:
             return "192.168.1.0/24"
 
